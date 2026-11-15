@@ -1,0 +1,74 @@
+# Sealed EV data. One [[set]] per set; one [[set.products]] per product.
+#   id      = TCGdex set id (https://api.tcgdex.net/v2/en/sets  or  /v2/ja/sets)
+#   rates   = chance per pack of pulling that rarity. Keys must match TCGdex rarity strings exactly
+#             (en: "Double rare", "Illustration rare", "Ultra Rare", "Special illustration rare", "Hyper rare",
+#              "ACE SPEC Rare"; ja SV2a: "Mega Hyper Rare" for the gold URs).
+#   bulk_per_pack = £ value you assign to everything else in a pack (commons, reverses...).
+#   products.price = 0 -> use the eBay sold median for ebay_query; set a number to use your own buy price.
+#   promos  = TCGdex card ids of promo cards included in the product.
+#
+# !! The rates below are ROUGH community estimates (pack-opening tallies) — check them against a current
+# !! pull-rate source before trusting the EV ranking. Pokémon doesn't publish official odds.
+
+[[set]]
+id = "sv03.5"
+lang = "en"
+name = "151"
+bulk_per_pack = 0.15
+rates = { "Double rare" = 0.20, "Illustration rare" = 0.083, "Ultra Rare" = 0.063, "Special illustration rare" = 0.031, "Hyper rare" = 0.019 }
+
+  [[set.products]]
+  name = "Booster Bundle"
+  packs = 6
+  promos = []
+  price = 0
+  ebay_query = '"151" "booster bundle" sealed -opened -empty -japanese -case -x2 -x3'
+
+  [[set.products]]
+  name = "Elite Trainer Box"
+  packs = 9
+  promos = []
+  price = 0
+  ebay_query = '"151" "elite trainer box" sealed -opened -empty -japanese -"pokemon center" -centre -center -"silver tempest" -"astral radiance" -case'
+
+[[set]]
+id = "sv08"
+lang = "en"
+name = "Surging Sparks"
+bulk_per_pack = 0.15
+rates = { "Double rare" = 0.20, "ACE SPEC Rare" = 0.05, "Illustration rare" = 0.11, "Ultra Rare" = 0.067, "Special illustration rare" = 0.0115, "Hyper rare" = 0.0053 }
+
+  [[set.products]]
+  name = "Booster Box"
+  packs = 36
+  promos = []
+  price = 0
+  ebay_query = '"surging sparks" "booster box" sealed -opened -empty -japanese -case -display'
+
+  [[set.products]]
+  name = "Elite Trainer Box"
+  packs = 9
+  promos = []
+  price = 0
+  ebay_query = '"surging sparks" "elite trainer box" sealed -opened -empty -japanese -"pokemon center" -centre -center -case'
+
+  [[set.products]]
+  name = "Booster Bundle"
+  packs = 6
+  promos = []
+  price = 0
+  ebay_query = '"surging sparks" "booster bundle" sealed -opened -empty -japanese -case'
+
+[[set]]
+id = "SV2a"
+lang = "ja"
+name = "Pokémon Card 151 (Japanese)"
+bulk_per_pack = 0.10
+rates = { "Double rare" = 0.35, "Illustration rare" = 0.22, "Ultra Rare" = 0.075, "Special illustration rare" = 0.03, "Mega Hyper Rare" = 0.008 }
+
+  [[set.products]]
+  name = "Booster Box (20 packs)"
+  packs = 20
+  promos = []
+  price = 0
+  ebay_query = '"151" japanese "booster box" sv2a sealed -opened -empty -case -english'

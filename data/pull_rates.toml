@@ -1,0 +1,127 @@
+# Pull-rate ESTIMATES per booster pack, by era, keyed on TCGdex rarity names. Pokémon publishes no odds; these are
+# rough community tallies. Override any set under [sets."<tcgdex id>"] (same keys). Edit freely — the Sealed EV
+# refresh reads this file every time.
+#
+# A value is the expected number of cards of that rarity per pack (so "Rare" = 1.0 means one rare slot per pack).
+# extra_sets: sub-sets pulled from the same packs (Galarian Gallery, Shiny Vault…), with their own rates.
+
+[eras.xy]
+bulk_per_pack = 0.10
+[eras.xy.rates]
+"Rare" = 1.0
+"Ultra Rare" = 0.11
+"Secret Rare" = 0.02
+
+[eras.sm]
+bulk_per_pack = 0.10
+[eras.sm.rates]
+"Rare" = 1.0
+"Ultra Rare" = 0.14
+"Secret Rare" = 0.03
+
+[eras.swsh]
+bulk_per_pack = 0.12
+[eras.swsh.rates]
+"Rare" = 0.67
+"Holo Rare" = 0.33
+"Holo Rare V" = 0.14
+"Holo Rare VMAX" = 0.06
+"Holo Rare VSTAR" = 0.06
+"Ultra Rare" = 0.09
+"Secret Rare" = 0.03
+"Amazing Rare" = 0.04
+"Radiant Rare" = 0.05
+
+[eras.sv]
+bulk_per_pack = 0.15
+[eras.sv.rates]
+"Rare" = 1.0
+"Double rare" = 0.20
+"Ultra Rare" = 0.067
+"Illustration rare" = 0.11
+"Special illustration rare" = 0.0115
+"Hyper rare" = 0.0053
+"ACE SPEC Rare" = 0.05
+
+# ---------------- Per-set overrides (special sets pull very differently) ----------------
+
+[sets."sv03.5".rates]          # 151
+"Rare" = 1.0
+"Double rare" = 0.20
+"Ultra Rare" = 0.063
+"Illustration rare" = 0.083
+"Special illustration rare" = 0.031
+"Hyper rare" = 0.019
+
+[sets."sv04.5".rates]          # Paldean Fates: baby shinies about 1 in 2 packs
+"Rare" = 1.0
+"Double rare" = 0.15
+"Ultra Rare" = 0.05
+"Illustration rare" = 0.03
+"Special illustration rare" = 0.012
+"Hyper rare" = 0.006
+"Shiny rare" = 0.5
+"Shiny Ultra Rare" = 0.04
+
+[sets."sv08.5".rates]          # Prismatic Evolutions
+"Rare" = 1.0
+"Double rare" = 0.18
+"Ultra Rare" = 0.06
+"Illustration rare" = 0.10
+"Special illustration rare" = 0.012
+"Hyper rare" = 0.008
+"ACE SPEC Rare" = 0.05
+
+[sets."swsh12.5".rates]        # Crown Zenith main set
+"Rare" = 0.67
+"Holo Rare" = 0.33
+"Holo Rare V" = 0.12
+"Holo Rare VMAX" = 0.05
+"Holo Rare VSTAR" = 0.06
+"Ultra Rare" = 0.08
+"Secret Rare" = 0.02
+"Radiant Rare" = 0.05
+[sets."swsh12.5".extra_sets."swsh12.5gg"]   # Galarian Gallery, about 1 in 3 packs
+"Rare" = 0.25
+"Ultra Rare" = 0.08
+"Secret Rare" = 0.01
+
+[sets."swsh4.5".rates]         # Shining Fates
+"Rare" = 0.67
+"Holo Rare" = 0.33
+"Holo Rare V" = 0.12
+"Holo Rare VMAX" = 0.05
+"Ultra Rare" = 0.06
+"Secret Rare" = 0.02
+"Amazing Rare" = 0.05
+[sets."swsh4.5".extra_sets."swsh4.5sv"]     # Shiny Vault, about 1 in 3 packs
+"Rare" = 0.25
+"Ultra Rare" = 0.06
+"Secret Rare" = 0.02
+
+[sets."sm115".rates]           # Hidden Fates
+"Rare" = 1.0
+"Ultra Rare" = 0.12
+"Secret Rare" = 0.02
+[sets."sm115".extra_sets."sma"]             # Shiny Vault, about 1 in 3 packs
+"Rare" = 0.25
+"Ultra Rare" = 0.07
+"Secret Rare" = 0.01
+
+# Trainer Gallery sub-sets (Brilliant Stars → Silver Tempest), about 1 in 3 packs
+[sets."swsh9".extra_sets."swsh9tg"]
+"Rare" = 0.2
+"Ultra Rare" = 0.12
+"Secret Rare" = 0.01
+[sets."swsh10".extra_sets."swsh10tg"]
+"Rare" = 0.2
+"Ultra Rare" = 0.12
+"Secret Rare" = 0.01
+[sets."swsh11".extra_sets."swsh11tg"]
+"Rare" = 0.2
+"Ultra Rare" = 0.12
+"Secret Rare" = 0.01
+[sets."swsh12".extra_sets."swsh12tg"]
+"Rare" = 0.2
+"Ultra Rare" = 0.12
+"Secret Rare" = 0.01
