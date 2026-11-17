@@ -121,7 +121,8 @@ def test_ev():
 
 def test_ev_eras():
     from core import catalog
-    assert [catalog.era_of(s) for s in ("sv08", "swsh12.5gg", "sm115", "xy7", "SV2a", "zzz")] == ["sv", "swsh", "sm", "xy", "sv", None]
+    assert [catalog.era_of(s) for s in ("sv08", "swsh12.5gg", "sm115", "xy7", "SV2a", "zzz", "me02.5", "30th")] == \
+        ["sv", "swsh", "sm", "xy", "sv", None, "me", "me"]
     cfg = {"eras": {"sv": {"bulk_per_pack": 0.15, "rates": {"Rare": 1.0, "Double rare": 0.2}}},
            "sets": {"sv03.5": {"rates": {"Rare": 1.0, "Hyper rare": 0.019}}}}
     assert ev.rates_for("sv08", cfg) == ({"Rare": 1.0, "Double rare": 0.2}, 0.15, {})       # era default
@@ -131,6 +132,22 @@ def test_ev_eras():
     assert kinds("sv03.5", "151", "2023-09-22") == ["ETB", "Bundle"]                        # no booster box
     assert kinds("sm12", "Cosmic Eclipse", "2019-11-01") == ["Booster Box", "ETB"]           # no bundles then
     assert next(p for k, n, p, q in ev.products_for("sm12", "Cosmic Eclipse") if k == "ETB") == 8
+    # One Piece (TCGCSV) and price trends
+    assert ev.op_rarity("Shanks (004) (Manga)", "SR") == "Manga rare"
+    assert ev.op_rarity("Nami (SP)", "SR") == "SP"
+    assert ev.op_rarity("Buggy (051) (Wanted Poster)", "R") == "R alt art"
+    assert ev.op_rarity("Monkey.D.Luffy (Parallel)", "L") == "L alt art"
+    assert ev.op_rarity("Shanks (004)", "SR") == "SR" and ev.op_rarity("Booster Box", None) is None
+    assert ev.op_rarity("Gum-Gum Pistol (Alternate Art)", "DON!!") == "DON!!"
+    assert ev.rates_for("OP09", {"eras": {"op": {"rates": {"SR": 0.33}}}}, "op") == ({"SR": 0.33}, 0.1, {})
+    assert prices.sealed_title_ok("One Piece OP-09 Emperors in the New World Booster Box Sealed English",
+                                  ["one piece", "booster box", "(OP09,OP-09)", "sealed"], ["case"], "en")
+    assert not prices.sealed_title_ok("One Piece OP-10 Royal Blood Booster Box Sealed", ["one piece", "booster box", "(OP09,OP-09)", "sealed"], [], "en")
+    assert not prices.sealed_title_ok("One Piece OP09 Booster Box Sealed Japanese", ["one piece", "booster box", "(OP09,OP-09)", "sealed"], [], "en")
+    t = date(2026, 11, 17)
+    h = [("2026-11-09", 90.0), ("2026-11-10", 100.0), ("2026-11-13", 104.0), ("2026-11-17", 110.0)]
+    assert ev.trend7(h, t) == 10.0 and ev.trend30(h, t) == 22.2       # week: 10th -> 17th; month: 9th -> 17th
+    assert ev.trend7([("2026-11-15", 100.0), ("2026-11-17", 120.0)], t) is None   # only 2 days apart: too soon
     assert next(p for k, n, p, q in ev.products_for("sv08", "Surging Sparks") if k == "ETB") == 9
     assert '"pokemon 151"' in ev.products_for("sv03.5", "151")[0][3]
     assert ev.open_label(1.2) == "Worth opening" and ev.open_label(0.5) == "Avoid opening" and ev.open_label(None) == "No price"
@@ -163,6 +180,121 @@ def test_sealed_filter():
     rows = [("a", 8.0), ("b", 11.0), ("c", 95.0), ("d", 99.0), ("e", 105.0)]
     assert [r[0] for r in prices.drop_cheap(rows, 1)] == ["c", "d", "e"]                   # sleeves at £8/£11 dropped
     assert prices.drop_cheap(rows[:2], 1) == rows[:2]                                       # too few to judge
+
+
+def test_sealed_wrong_products_and_fakes():
+    names = ("Evolutions", "Prismatic Evolutions", "Team Up", "151", "Pokémon Card 151 (Japanese)", "Sword & Shield",
+             "Darkness Ablaze", "Brilliant Stars", "XY")
+    ex = ev.conflicts("Evolutions", "xy", names)
+    assert "prismatic evolutions" in ex and "mega evolutions" in ex and "scarlet & violet" in ex and "xy" not in ex
+    pe = ev.conflicts("Prismatic Evolutions", "sv", names)
+    assert "evolutions" not in pe and "prismatic evolutions" not in pe                       # part of its own name
+    assert "scarlet & violet" not in pe and "team up" in pe                                  # own series / other set
+    assert "sword & shield" not in ev.conflicts("Brilliant Stars", "swsh", names)             # series, not a product
+    assert ev.conflicts("Pokémon Card 151 (Japanese)", "ja", names) == []
+
+    def ok(name, era, kind, title, lang="en"):
+        q, inc, exc = prices.parse_query(next(p[3] for p in ev.products_for("x", name) if p[0] == kind))
+        return prices.sealed_title_ok(title, inc, exc + ev.conflicts(name, era, names), lang)
+    # real titles stored under XY Evolutions / Team Up before this check existed
+    assert not ok("Evolutions", "xy", "Booster Box", "*New & Sealed* Pokemon TCG - Mega Evolutions Chaos Rising Booster Box (36 Packs)")
+    assert not ok("Evolutions", "xy", "ETB","Pokémon TCG Prismatic Evolutions Elite Trainer Box ETB Sealed")
+    assert not ok("Evolutions", "xy", "ETB", "Pokemon TCG: Ascended Heroes Elite Trainer Box - ETB - Mega Evolutions")
+    assert ok("Evolutions", "xy", "ETB", "Pokemon TCG - XY Evolutions Elite Trainer Box 2016 ETB Blastoise New Sealed")
+    assert not ok("Team Up", "sm", "Booster Box", "Sealed Indonesian Team Up Booster Box - Tag Bolt SM9 AC3a Rare Sun & Moon GX")
+    assert ok("Team Up", "sm", "Booster Box", "Pokemon Sun & Moon Team Up Booster Box Factory Sealed")
+    # base sets named like their series: other sets' ETBs say 'Sword and Shield' too
+    assert not ok("Sword & Shield", "swsh", "ETB", "Pokémon Sword and Shield Darkness Ablaze ETB Elite Trainer Box Eternatus Sealed")
+    assert ok("Sword & Shield", "swsh", "ETB", "Pokemon TCG Sword and Shield Elite Trainer Box ETB Plus Zamazenta New Sealed")
+    assert ok("Brilliant Stars", "swsh", "ETB", "Pokémon TCG Sword & Shield Brilliant Stars Elite Trainer Box ETB New Sealed")
+    # a lone £150 'vintage box' against £900 of sales is not the product
+    assert prices.drop_cheap([("a", 150.0)], 1, ref=900.0) == []
+    assert prices.drop_cheap([("a", 850.0)], 1, ref=900.0) == [("a", 850.0)]
+    risky = prices.risky_seller
+    assert risky({"seller": {"feedbackScore": 2, "feedbackPercentage": "100.0"}}, 400.0)        # new account, £400
+    assert not risky({"seller": {"feedbackScore": 2, "feedbackPercentage": "100.0"}}, 12.0)     # new account, £12 card
+    assert risky({"seller": {"feedbackScore": 900, "feedbackPercentage": "91.2"}}, 12.0)        # poor feedback
+    assert not risky({"seller": {"feedbackScore": 900, "feedbackPercentage": "99.8"}}, 1500.0)
+    assert not risky({}, 1500.0)                                                                # no seller info
+
+
+def test_condition_and_risk():
+    from core import ebay
+    cfi = ebay.condition_from_item
+    cc = lambda text, *info: {"conditionDescriptors": [{"name": "Card Condition", "values": [{"content": text, "additionalInfo": list(info)}]}]}
+    assert cfi({**cc("Near mint or better", "Minor corner and edge wear"), "description": "<p>No creases at all.</p>"}) == \
+        {"graded": False, "condition": "NM", "downgraded": False}      # eBay's own NM preset text is not damage
+    assert cfi(cc("Moderately played (Very good)", "Moderate creasing"))["condition"] == "MP"
+    assert cfi(cc("Lightly played (Excellent)"))["condition"] == "LP"
+    assert cfi(cc("Damaged"))["condition"] == "HP"
+    assert cfi({**cc("Near mint or better"), "description": "Small crease on the back, see photo 3"}) == \
+        {"graded": False, "condition": "MP", "downgraded": True}       # declared NM, admits a crease
+    assert cfi({**cc("Near mint or better"), "description": "Crease-free, no bends, never played"})["condition"] == "NM"
+    g = cfi({"conditionDescriptors": [{"name": "Professional Grader", "values": [{"content": "Professional Sports Authenticator (PSA)"}]},
+                                      {"name": "Grade", "values": [{"content": "10"}]},
+                                      {"name": "Certification Number", "values": [{"content": "99061238"}]}]})
+    assert g == {"graded": True, "grader": "PSA", "grade": "10", "cert": "99061238"}
+    assert cfi({"title": "x"}) is None                                 # no descriptors: title decides
+    risk = ebay.listing_risk
+    base = {"seller": {"feedbackScore": 300, "feedbackPercentage": "99.6"}, "image": {"imageUrl": "u"},
+            "additionalImages": [{}, {}], "title": "Charizard ex 199/165", "description": "<p>Lovely card, see photos</p>"}
+    assert risk(base, 80.0, 100.0) == ([], [])
+    assert risk({**base, "seller": {"feedbackScore": 3, "feedbackPercentage": "100.0"}}, 80.0, 100.0)[0] == ["new seller (3 feedback) at £80"]
+    assert risk({**base, "seller": {"feedbackScore": 3, "feedbackPercentage": "100.0"}}, 20.0, 25.0) == ([], [])   # cheap card, fine
+    assert risk({**base, "seller": {"feedbackScore": 30, "feedbackPercentage": "100.0"}}, 40.0, 50.0) == ([], ["seller has 30 feedback"])
+    assert risk({**base, "description": "High quality proxy card for casual play"}, 80.0, 100.0)[0] == ["description says 'proxy'"]
+    assert risk({**base, "lotSize": 4}, 80.0, 100.0)[0] == ["lot of 4"]
+    assert risk(base, 15.0, 100.0)[0] == ["15% of market: too cheap to be real"]
+    assert risk({**base, "additionalImages": []}, 30.0, 100.0) == ([], ["only 30% of market", "1 photo"])
+    asks, track = prices.rebucket_played([("a", "d", "k", "Raw", "t", 9.0, "", ""), ("b", "d", "k", "Raw", "t", 9.0, "", "")],
+                                         [("a", "k", "Raw", "t", 9.0), ("b", "k", "PSA 10", "t", 9.0)], {"a", "b"})
+    assert [a[3] for a in asks] == ["Raw played", "Raw played"] and [t[2] for t in track] == ["Raw played", "PSA 10"]
+
+
+def test_listing_photos():
+    from PIL import Image, ImageDraw
+    from core import vision
+
+    def photo(card_rgb, bg_rgb):
+        im = Image.new("RGB", (300, 400), bg_rgb)
+        ImageDraw.Draw(im).rectangle((40, 40, 260, 360), fill=card_rgb)
+        return im
+    back_dark, back_white = photo((30, 70, 170), (40, 40, 40)), photo((30, 70, 170), (245, 245, 245))
+    front_dark = photo((230, 200, 60), (40, 40, 40))
+    assert vision.is_card_back(back_dark) and vision.is_card_back(back_white) and not vision.is_card_back(front_dark)
+    assert not vision.on_white(back_dark) and vision.on_white(back_white) and not vision.on_white(front_dark)
+    v = vision.photo_verdict
+    assert v([False], [False], None, "NM") == ("no photo of the back", "NM", [])
+    assert v([False, True], [False, True], None, "NM")[0].startswith("photos on a white background")
+    assert v([False, True], [True, False], None, "NM") == (None, "NM", [])     # front on white, back not: fine
+    base = {"front_seen": True, "back_seen": True, "white_background": False, "condition": None, "notes": []}
+    g = lambda **k: vision.PhotoGrade(**{**base, **k})
+    assert v([True], [False], g(condition="LP", notes=["whitening on back corners"]), "NM") == (None, "LP", ["whitening on back corners"])
+    assert v([True], [False], g(condition="NM"), "LP") == (None, "LP", [])      # photos never upgrade a seller's own grade
+    assert v([True], [False], g(back_seen=False), "NM")[0] == "no photo of the back"   # Claude overrides the heuristic
+    assert v([True], [False], g(white_background=True), "NM")[0].startswith("photos on a white")
+    assert vision.photo_urls({"image": {"imageUrl": "https://i.ebayimg.com/images/g/x/s-l225.jpg"},
+                              "additionalImages": [{"imageUrl": "https://i.ebayimg.com/images/g/y/s-l1600.jpg"}]}) == \
+        ["https://i.ebayimg.com/images/g/x/s-l1600.jpg", "https://i.ebayimg.com/images/g/y/s-l1600.jpg"]
+    assert vision.photo_urls({}) == []
+
+
+def test_ev_breakdown():
+    info = {"cards": [{"card": "Charizard ex", "id": "x-1", "rarity": "Special illustration rare", "value": 200.0, "source": "sold ×5"},
+                      {"card": "Mew ex", "id": "x-2", "rarity": "Special illustration rare", "value": 50.0, "source": "asks ×9"},
+                      {"card": "Pikachu", "id": "x-3", "rarity": "Illustration rare", "value": 10.0, "source": "sold ×4"}],
+            "rates": {"Special illustration rare": 0.02, "Illustration rare": 0.1}, "bulk": 0.15}
+    cards, rar, tot = ev.breakdown(info, 36)
+    assert tot == {"ev_pack": 3.65, "product_ev": 131.4, "bulk": 5.4}          # 0.15 + 0.02×125 + 0.1×10 = 3.65 per pack
+    assert [(c["card"], c["pulls"], c["gbp"]) for c in cards] == [("Charizard ex", 0.36, 72.0), ("Pikachu", 3.6, 36.0), ("Mew ex", 0.36, 18.0)]
+    assert rar[0] == {"rarity": "Special illustration rare", "cards": 2, "avg_value": 125.0, "rate": 0.02, "one_in": 50,
+                      "per_pack": 2.5, "per_product": 90.0}
+    assert ev.breakdown({"cards": [], "rates": {}, "bulk": 0}, 9) == ([], [], {"ev_pack": 0, "product_ev": 0, "bulk": 0})
+    r, bulk, extra = ev.rates_for("sv05")
+    assert r["Special illustration rare"] == 0.0116 and r["ACE SPEC Rare"] == 0.05 and bulk == 0.15     # 2024 standard
+    assert ev.rates_for("sv01")[0]["Special illustration rare"] == 0.031                                 # 2023 sets, 1 in 32
+    assert "Illustration rare" not in ev.rates_for("sv08.5")[0]                                         # Prismatic: all SIR
+    assert ev.rates_for("swsh4.5")[2]["swsh4.5sv"]["Shiny rare"] == 0.25                                 # Shiny Vault keyed right
 
 
 def test_title_ok():

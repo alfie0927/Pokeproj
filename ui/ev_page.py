@@ -7,8 +7,10 @@ import streamlit as st
 from core import db, ev
 from ui.common import LABEL_KIND, chip, env_pills, esc, header, money, section, tiles
 
-ERAS = {"All eras": None, "Scarlet & Violet": "sv", "Sword & Shield": "swsh", "Sun & Moon": "sm", "XY": "xy"}
-KINDS = [("Booster Boxes", "Booster Box"), ("Elite Trainer Boxes", "ETB"), ("Booster Bundles", "Bundle")]
+ERAS = {"All eras": None, "Mega Evolution": "me", "Scarlet & Violet": "sv", "Sword & Shield": "swsh", "Sun & Moon": "sm",
+        "XY": "xy"}
+KINDS = [("Booster Boxes", "Booster Box", "pokemon"), ("Elite Trainer Boxes", "ETB", "pokemon"),
+         ("Booster Bundles", "Bundle", "pokemon"), ("One Piece Booster Boxes", "Booster Box", "onepiece")]
 SHOW_LABEL = {"No UK price": "Awaiting UK sales"}
 LABEL_HELP = {
     "Invest or open": "Worth more opened than sealed, and the sealed price is rising.",
@@ -33,13 +35,25 @@ def page():
                 "and prices every Booster Box, ETB and Bundle (a few minutes). After that it refreshes daily.")
         return
     st.caption(f"Updated {fmt_age(n['at'])} · **Price** = median of recent UK eBay sales (`sold ×N`), or a UK estimate "
-               "from the cheaper current listings (`est.`) until 3 sales are confirmed · **EV** = expected value of "
+               "from the cheaper current listings (`est.`) until 3 sales are confirmed; `thin` = only 1-2 UK listings, "
+               "ranked last · **EV** = expected value of "
                "the cards inside, from estimated pull rates (data/pull_rates.toml) and UK card prices.")
     want = ERAS[era]
-    for tab, (_, kind) in zip(st.tabs([t for t, _ in KINDS]), KINDS):
+    for tab, (_, kind, game) in zip(st.tabs([t for t, *_ in KINDS]), KINDS):
         with tab:
-            ranking(kind, want)
+            if game == "onepiece":
+                st.caption("English One Piece booster boxes (24 packs × 12 cards). Card values are TCGplayer market prices in £ "
+                           "(USD→GBP rate in Settings); pull rates are rough community box tallies (`[eras.op]` in "
+                           "data/pull_rates.toml). The era filter above applies to Pokémon only.")
+            ranking(kind, want if game == "pokemon" else None, game)
     set_details(want)
+
+
+def pct_chip(label, v):
+    """'7d +3.2%' chip, coloured by direction; '7d: new' until the history is long enough."""
+    if v is None:
+        return chip(f"{label}: new", "")
+    return chip(f"{label} {v:+.1f}%", "good" if v > 1 else "bad" if v < -1 else "")
 
 
 def refresh():
@@ -58,21 +72,29 @@ def fmt_age(iso):
         else f"{mins / 1440:.0f} days ago"
 
 
-def ranking(kind, era):
-    rows = ev.ranked(kind, era)
+def ranking(kind, era, game="pokemon"):
+    rows = ev.ranked(kind, era, game)
     if not rows:
-        st.caption("No products of this kind for the selected era.")
+        st.caption("No products of this kind for the selected era." if game == "pokemon" else
+                   "No One Piece boxes yet: press **Refresh sealed data** once.")
         return
     priced = [r for r in rows if r["price"]]
     best = priced[0] if priced else None
+    weekly = [r["trend7"] for r in priced if r["trend7"] is not None]
     tiles([("Ranked", len(priced), f"{len(rows) - len(priced)} awaiting UK sales", True),
            ("Best value", best["set_name"] if best else "—", f"{best['ratio']:.2f}× EV ÷ price" if best else ""),
            ("Sold-price backed", sum(r["basis"] == "sold" for r in priced), "3+ recent UK sales; rest are est."),
-           ("Worth opening", sum(r["ratio"] >= 1.15 for r in priced), "EV ≥ 1.15× price")])
-    if st.toggle("Table view", False, key=f"tbl{kind}{era}"):
+           ("Prices this week", f"{sum(weekly) / len(weekly):+.1f}%" if weekly else "—",
+            f"average 7-day change over {len(weekly)} products" if weekly else "history still building")])
+    if st.toggle("Table view", False, key=f"tbl{kind}{era}{game}"):
         table(priced + [r for r in rows if not r["price"]])
         return
-    st.html("".join(row_html(i, r) for i, r in enumerate(priced, 1)))
+    for i, r in enumerate(priced, 1):
+        c1, c2 = st.columns([13, 1.4], vertical_alignment="center")
+        c1.html(row_html(i, r))
+        if c2.button("EV ▸", key=f"evb_{r['key']}", width="stretch",
+                     help="How this EV is worked out: every card inside, its UK price and its pull rate"):
+            show_breakdown(r)
     unpriced = [r for r in rows if not r["price"]]
     if unpriced:
         with st.expander(f"Awaiting UK sales ({len(unpriced)})"):
@@ -87,9 +109,11 @@ def row_html(rank, r):
            f'<img class="logo" src="{esc(r["logo"])}">' if r["logo"] else '<span class="pp-muted">—</span>')
     label = r["label"]
     basis = (f'sold ×{r["sold_n"]}' if r["basis"] == "sold" else "est." if r["basis"] == "est" else
+             f'thin: {r["n"]} listing{"s" * (r["n"] != 1)}' if r["basis"] == "thin" else
              "manual" if r["basis"] == "manual" else "")
     share = r["ebay_share"]
-    trend = f' · trend {r["trend30"]:+.0f}%' if r["trend30"] is not None else ""
+    priced_by = ("EV TCGplayer-priced (USD→£)" if r["era"] == "op" else
+                 f'EV {f"{share:.0%}" if share is not None else "–"} eBay-priced')
     return f"""<div class="pp-rank{' top' if rank == 1 else ''}">
       <div class="n">{f'#{rank}' if rank else '–'}</div>
       <div class="img">{img}</div>
@@ -97,11 +121,12 @@ def row_html(rank, r):
         <div class="nm">{esc(title(r))}</div>
         <div class="sub">{esc(r["set_name"])} · {esc((r["release"] or "")[:4])} · {r["packs"]} packs</div>
         <div style="margin-top:6px">{chip(SHOW_LABEL.get(label, label), LABEL_KIND.get(label, "accent"))}
+          {pct_chip("7d", r.get("trend7")) if r["price"] else ""}{pct_chip("30d", r["trend30"]) if r["price"] else ""}
           <span class="pp-muted" title="Share of the EV priced from eBay data (the rest uses Cardmarket until eBay
-          data arrives)">EV {f"{share:.0%}" if share is not None else "–"} eBay-priced{trend}</span></div>
+          data arrives)">{priced_by}</span></div>
       </div>
       <div class="col"><div class="k">UK price</div><div class="v">{money(r["price"])}</div>
-        <div class="s">{chip(basis, "good" if r["basis"] == "sold" else "") if basis else ""}</div></div>
+        <div class="s">{chip(basis, "good" if r["basis"] == "sold" else "warn" if r["basis"] == "thin" else "") if basis else ""}</div></div>
       <div class="col"><div class="k">EV if opened</div><div class="v">{money(r["product_ev"])}</div>
         <div class="s">{money(r["ev_pack"])} / pack</div></div>
       <div class="col"><div class="k">Profit if opened</div>
@@ -113,6 +138,57 @@ def row_html(rank, r):
     </div>"""
 
 
+@st.dialog("How the EV is worked out", width="large")
+def show_breakdown(r):
+    info = db.setting(f"ev:{r['set_id']}") or {}
+    if not info.get("cards"):
+        st.info("Press **Refresh sealed data** once: the per-card breakdown is stored on the next refresh.")
+        return
+    cards, rar, tot = ev.breakdown(info, r["packs"])
+    extra = round((r["product_ev"] or 0) - tot["product_ev"], 2)
+    st.markdown(f"**{esc(title(r))}** · {r['packs']} packs · **{money(tot['ev_pack'])} per pack × {r['packs']} = "
+                f"{money(tot['product_ev'])}**" + (f" + {money(extra)} promo cards" if extra > 0.01 else "")
+                + f" · bulk (commons, reverses, energy) {money(tot['bulk'])} of that")
+    st.caption("Each card's share = its UK value × how many of it you expect in this product. Expected pulls = the rarity's "
+               "pull rate per pack × packs ÷ how many cards share that rarity. Pull rates are community tallies "
+               "(TCGplayer and others, edit `data/pull_rates.toml`); values are raw NM UK prices: eBay sold → cheaper "
+               "current UK listings → Cardmarket until eBay data exists"
+               + (" (One Piece: TCGplayer market prices in £)." if r["era"] == "op" else "."))
+    price_chart({title(r): r.get("history") or []}, r.get("trend7"), r["trend30"])
+    st.markdown("**By rarity**")
+    st.dataframe(pd.DataFrame(rar)[["rarity", "cards", "avg_value", "one_in", "rate", "per_pack", "per_product"]],
+                 hide_index=True, width="stretch",
+                 column_config={"rarity": "Rarity", "cards": st.column_config.NumberColumn("Cards", width="small"),
+                                "avg_value": st.column_config.NumberColumn("Avg value", format="£%.2f"),
+                                "one_in": st.column_config.NumberColumn("1 in N packs", width="small"),
+                                "rate": st.column_config.NumberColumn("Per pack", format="%.3f", help="Expected cards of this rarity per pack"),
+                                "per_pack": st.column_config.NumberColumn("£ / pack", format="£%.2f"),
+                                "per_product": st.column_config.NumberColumn("£ / product", format="£%.2f")})
+    st.markdown("**Every card, biggest share first**")
+    st.dataframe(pd.DataFrame(cards)[["image", "card", "number", "rarity", "value", "source", "one_in", "pulls", "gbp"]],
+                 hide_index=True, width="stretch", row_height=64,
+                 column_config={"image": st.column_config.ImageColumn("", width="small"), "card": "Card", "number": "#",
+                                "rarity": "Rarity", "value": st.column_config.NumberColumn("UK value", format="£%.2f"),
+                                "source": st.column_config.TextColumn("Price basis", width="medium"),
+                                "one_in": st.column_config.NumberColumn("Rarity: 1 in N packs", width="small"),
+                                "pulls": st.column_config.NumberColumn("Expected in product", format="%.3f",
+                                                                       help="rate per pack × packs ÷ cards of this rarity"),
+                                "gbp": st.column_config.NumberColumn("£ share of EV", format="£%.2f")})
+
+
+def price_chart(series, t7=None, t30=None):
+    """UK sealed price over time (daily median of current UK listings). series: {label: [(day, £)]}."""
+    pts = {k: v for k, v in series.items() if len(v) >= 2}
+    if not pts:
+        st.caption("Price history appears after two daily refreshes.")
+        return
+    st.markdown("**UK price over time** " + (pct_chip("7d", t7) if t7 is not None or t30 is not None else "")
+                + (pct_chip("30d", t30) if t30 is not None else ""), unsafe_allow_html=True)
+    df = pd.DataFrame({k: dict(v) for k, v in pts.items()}).sort_index()
+    df.index = pd.to_datetime(df.index)
+    st.line_chart(df, height=220, y_label="£ (daily median of UK listings)")
+
+
 def title(r):
     """'Elite Trainer Box' from sets.toml -> '151 Elite Trainer Box'."""
     return r["name"] if r["set_name"].lower() in r["name"].lower() else f"{r['set_name']} {r['name']}"
@@ -122,13 +198,19 @@ def table(rows):
     df = pd.DataFrame([{"#": i if r["price"] else None, "Photo": r["image"] or r["logo"], "Product": title(r),
                         "Verdict": SHOW_LABEL.get(r["label"], r["label"]), "UK price": r["price"],
                         "Price basis": (f"sold ×{r['sold_n']}" if r["basis"] == "sold" else r["basis"] or ""),
+                        "Price 30d": [v for _, v in (r.get("history") or [])[-30:]],
+                        "7d %": r.get("trend7"), "30d %": r["trend30"],
                         "EV if opened": r["product_ev"], "Profit if opened": r["profit"], "EV ÷ price": r["ratio"],
                         "EV/pack": r["ev_pack"], "£/pack": (r["price"] / r["packs"]) if r["price"] else None,
                         "EV eBay-priced": r["ebay_share"], "Released": (r["release"] or "")[:10]}
                        for i, r in enumerate(rows, 1)])
     m = st.column_config.NumberColumn(format="£%.2f")
+    pc = st.column_config.NumberColumn(format="%+.1f%%", width="small")
     st.dataframe(df, hide_index=True, width="stretch", row_height=64,
                  column_config={"Photo": st.column_config.ImageColumn(width="small"), "UK price": m,
+                                "Price 30d": st.column_config.LineChartColumn("Price 30d", width="small",
+                                                                              help="Daily median UK asking price"),
+                                "7d %": pc, "30d %": pc,
                                 "EV if opened": m, "Profit if opened": m, "EV/pack": m, "£/pack": m,
                                 "EV ÷ price": st.column_config.NumberColumn(format="%.2f×"),
                                 "EV eBay-priced": st.column_config.NumberColumn(format="percent")})
@@ -159,3 +241,6 @@ def set_details(era):
         if not top.empty:
             st.dataframe(top[["card", "rarity", "value", "source"]], hide_index=True, width="stretch",
                          column_config={"value": st.column_config.NumberColumn("Value", format="£%.2f")})
+    prods = [r for r in db.q("SELECT key, name, set_name FROM products WHERE set_id=?", (pick,))]
+    hist = ev.price_histories([p["key"] for p in prods])
+    price_chart({title(p): hist[p["key"]] for p in prods})

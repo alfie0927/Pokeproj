@@ -33,6 +33,7 @@ def page():
             "mult_HP": c2.number_input("HP ×", 0.0, 1.0, float(db.setting("mult_HP"))),
             "stale_hours": c3.number_input("Refresh asking prices after (hours)", 1, 720, int(db.setting("stale_hours"))),
             "eur_gbp": c3.number_input("EUR→GBP rate (Cardmarket EU reference only)", 0.5, 1.5, float(db.setting("eur_gbp"))),
+            "usd_gbp": c3.number_input("USD→GBP rate (One Piece card values from TCGplayer)", 0.5, 1.5, float(db.setting("usd_gbp"))),
             "browse_budget": c3.number_input("eBay Browse calls per day the app may use", 500, 5000,
                                              int(db.setting("browse_budget")), 100,
                                              help="eBay's free limit is 5,000/day. The daily refresh, deal scanner "

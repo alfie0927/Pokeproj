@@ -125,9 +125,14 @@ def _matches(desc, grader, grade, condition):
     return words[condition] in flat
 
 
-def search_active(query, condition_ids=None, category=CATEGORY, limit=200, sort=None, buying="FIXED_PRICE", offset=0):
+PLAYED_ASPECT = "Card Condition:{Lightly Played (Excellent)|Moderately Played (Very Good)|Heavily Played (Poor)|Damaged}"
+
+
+def search_active(query, condition_ids=None, category=CATEGORY, limit=200, sort=None, buying="FIXED_PRICE", offset=0,
+                  aspect=None):
     """Active UK-located listings (excluding your own). buying: FIXED_PRICE or AUCTION. Free: 5,000 calls/day.
-    offset pages through results 200 at a time (eBay allows up to 10,000)."""
+    offset pages through results 200 at a time (eBay allows up to 10,000). aspect: an item-specific filter such as
+    PLAYED_ASPECT (eBay's structured 'Card Condition', which sellers fill in far more often than the title)."""
     f = [f"buyingOptions:{{{buying}}}", "itemLocationCountry:GB", "deliveryCountry:GB"]
     if condition_ids:
         f.append("conditionIds:{" + "|".join(condition_ids) + "}")
@@ -141,7 +146,102 @@ def search_active(query, condition_ids=None, category=CATEGORY, limit=200, sort=
         params["category_ids"] = category
     if sort:
         params["sort"] = sort
+    if aspect:
+        params["aspect_filter"] = f"categoryId:{category or CATEGORY},{aspect}"
     return call("GET", "/buy/browse/v1/item_summary/search", kind="app", params=params).json().get("itemSummaries", [])
+
+
+# ---------- Reading one listing: condition and scam signals (pure) ----------
+
+GRADERS = ("PSA", "BGS", "CGC", "SGC", "TAG", "ACE")
+# Words in a description that mean the card is not a real, single card. Title junk lives in prices.TITLE_JUNK.
+DESC_JUNK = ("proxy", "proxies", "custom card", "custom made", "reprint", "replica", "reproduction", "not official",
+             "unofficial", "fan made", "fanmade", "fan-made", "metal card", "gold metal", "picture only", "photo only",
+             "image only", "no physical", "printed at home", "orica")
+_NEGATED = re.compile(r"\b(?:no|not|without|free (?:of|from)|zero|any|never)\b[^.,;!]{0,30}?"
+                      r"(?:crease\w*|bend\w*|bent|water damage|torn|tear|ink|writing)")
+_DAMAGE = re.compile(r"\b(crease[sd]?|creasing|bent|bends?|water damage|torn|tear|ink marks?|writing on|heavy whitening|"
+                     r"rounded corners?)\b")
+
+
+def _text(vals):
+    return " ".join(str(v.get("content") or "") + " " + " ".join(v.get("additionalInfo") or []) for v in vals or [])
+
+
+def strip_html(s):
+    return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", s or ""))
+
+
+def damaged_text(text):
+    """Pure. True when free text admits a crease / bend / tear / ink (negations like 'no creases' ignored).
+    ponytail: a phrase scrubber, not a parser; 'no creases but a bend' loses the bend."""
+    t = _NEGATED.sub(" ", (text or "").lower())
+    t = re.sub(r"\b(?:crease|bend|damage|tear)\w*[- ]free\b", " ", t)
+    return _DAMAGE.search(t) is not None
+
+
+def condition_from_item(item):
+    """Pure. eBay's structured condition from a getItem payload, or None when the listing has none (title words
+    decide then). Raw: {'graded': False, 'condition': NM/LP/MP/HP, 'downgraded': bool}; a declared NM/LP whose own
+    description admits a crease or bend counts as MP. Graded: {'graded': True, 'grader', 'grade', 'cert'}."""
+    desc = {d.get("name", ""): d.get("values") or [] for d in item.get("conditionDescriptors") or []}
+    if not desc:
+        return None
+    pick = lambda *names: next((desc[n] for n in names if n in desc), [])
+    if pick("Professional Grader", "27501") or item.get("conditionId") == "2750":
+        g = _text(pick("Professional Grader", "27501")).upper()
+        grader = next((x for x in GRADERS if x in g), "BGS" if "BECKETT" in g else None)
+        grade = _text(pick("Grade", "27502")).strip() or None
+        return {"graded": True, "grader": grader, "grade": grade,
+                "cert": _text(pick("Certification Number", "27503")).strip() or None}
+    cc = _text(pick("Card Condition", "40001")).lower().strip()
+    cond = ("NM" if cc.startswith("near mint") else "LP" if cc.startswith("lightly") else
+            "MP" if cc.startswith("moderately") else "HP" if cc.startswith(("heavily", "damaged")) else None)
+    if not cond:
+        return None
+    own_words = " ".join([item.get("conditionDescription") or "", strip_html(item.get("description"))])
+    down = cond in ("NM", "LP") and damaged_text(own_words)
+    return {"graded": False, "condition": "MP" if down else cond, "downgraded": down}
+
+
+def risky_seller(item, total):
+    """Pure. Fake/scam risk from the seller: under 95 % positive feedback, or a near-new account (<10 feedback)
+    asking £50+. Listings without seller info are not judged."""
+    s = item.get("seller") or {}
+    if s.get("feedbackScore") is None:
+        return False
+    return float(s.get("feedbackPercentage") or 0) < 95 or (int(s["feedbackScore"]) < 10 and total >= 50)
+
+
+def listing_risk(item, total, market=None):
+    """Pure. (hard, soft) reasons a listing may not be what it claims. hard = never shown, never a price point
+    (poor-feedback or brand-new seller on a dear card, a lot, a description admitting a proxy/reprint, a price far
+    too low to be real); soft = shown with a warning (few feedback, well under market, a single photo)."""
+    hard, soft = [], []
+    s = item.get("seller") or {}
+    fb, pct = s.get("feedbackScore"), float(s.get("feedbackPercentage") or 100)
+    if fb is not None:
+        if pct < 95:
+            hard.append(f"seller {pct:.0f}% positive")
+        elif int(fb) < 10 and total >= 50:
+            hard.append(f"new seller ({fb} feedback) at £{total:.0f}")
+        elif int(fb) < 50 and total >= 30:
+            soft.append(f"seller has {fb} feedback")
+    if (item.get("lotSize") or 0) > 1:
+        hard.append(f"lot of {item['lotSize']}")
+    text = " ".join([item.get("title") or "", item.get("shortDescription") or "", strip_html(item.get("description"))]).lower()
+    junk = next((w for w in DESC_JUNK if re.search(rf"(?<![\w]){re.escape(w)}(?![\w])", text)), None)
+    if junk:
+        hard.append(f"description says '{junk}'")
+    if market and total:
+        if market >= 40 and total <= 0.2 * market:
+            hard.append(f"{total / market:.0%} of market: too cheap to be real")
+        elif market >= 30 and total <= 0.35 * market:
+            soft.append(f"only {total / market:.0%} of market")
+    photos = (1 + len(item.get("additionalImages") or [])) if item.get("image") else 0
+    if photos <= 1 and (market or 0) >= 30:
+        soft.append("1 photo")
+    return hard, soft
 
 
 def sold_search(query, category=CATEGORY, limit=200):
@@ -195,7 +295,8 @@ def lowest_listing(query, title_ok, grader=None, grade=None, condition="NM", max
     for n in range(0, len(items), 5):   # 5 at a time, cheapest first: usually one round trip instead of up to 10
         batch = items[n:n + 5]
         for it, full in zip(batch, get_items([i["itemId"] for i in batch])):
-            if isinstance(full, dict) and _matches(_descriptor_condition(full), grader, grade, condition):
+            if isinstance(full, dict) and _matches(_descriptor_condition(full), grader, grade, condition) \
+                    and not listing_risk(full, _total(it))[0]:
                 return {"title": it["title"], "total": round(_total(it), 2), "price": float(it["price"]["value"]),
                         "url": it.get("itemWebUrl")}
     return None

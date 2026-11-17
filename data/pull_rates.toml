@@ -1,127 +1,294 @@
-# Pull-rate ESTIMATES per booster pack, by era, keyed on TCGdex rarity names. Pokémon publishes no odds; these are
-# rough community tallies. Override any set under [sets."<tcgdex id>"] (same keys). Edit freely — the Sealed EV
-# refresh reads this file every time.
+# Pull-rate ESTIMATES per booster pack, by era, keyed on TCGdex rarity names. Pokémon publishes no odds. The numbers
+# below come from the largest public tallies (mostly TCGplayer's, 1,200-8,000+ packs per set, as reported by
+# PokeBeach / Card Codex / Elite Fourum), rounded; where no tally exists the line says "rough". Override any set
+# under [sets."<tcgdex id>"] (same keys). Edit freely: the Sealed EV refresh reads this file every time.
 #
-# A value is the expected number of cards of that rarity per pack (so "Rare" = 1.0 means one rare slot per pack).
-# extra_sets: sub-sets pulled from the same packs (Galarian Gallery, Shiny Vault…), with their own rates.
+# A value is the expected number of cards of that rarity per pack ("1 in 20 packs" = 0.05). "Rare" is the plain rare
+# slot: 1 minus the hits that replace it (ex / V / full arts / golds). Illustration rares, shinies, ACE SPECs and
+# gallery cards replace the reverse-holo slot, so they add on top.
+# extra_sets: sub-sets pulled from the same packs (Galarian Gallery, Shiny Vault, Trainer Gallery…), own rates.
+# Last checked: Nov 2026.
 
-[eras.xy]
+[eras.xy]                       # 2014-16. Elite Fourum sheet model: ~4.4 EX + 2.4 full arts + 1 secret per 36 packs
 bulk_per_pack = 0.10
 [eras.xy.rates]
-"Rare" = 1.0
-"Ultra Rare" = 0.11
-"Secret Rare" = 0.02
+"Rare" = 0.79
+"Ultra Rare" = 0.19             # EX / Mega / full art, ~1 in 5
+"Secret Rare" = 0.025           # ~1 in 40
 
-[eras.sm]
+[eras.sm]                       # 2017-19. Elite Fourum: ~4 GX + ~2 full arts per box; rainbows 1:40-100, golds 1:110-145
 bulk_per_pack = 0.10
 [eras.sm.rates]
-"Rare" = 1.0
-"Ultra Rare" = 0.14
-"Secret Rare" = 0.03
+"Rare" = 0.81
+"Ultra Rare" = 0.165            # GX (~1 in 9) + full-art GX / trainers (~1 in 18)
+"Secret Rare" = 0.025           # rainbow + gold, ~1 in 40
 
-[eras.swsh]
-bulk_per_pack = 0.12
+[eras.swsh]                     # 2020-23. TCGplayer, Lost Origin: V 1:9, VMAX/VSTAR 1:23, full/alt arts 1:22 together,
+bulk_per_pack = 0.12            # rainbow 1:78, gold 1:131, gold VMAX 1:117, Radiant 1:20
 [eras.swsh.rates]
-"Rare" = 0.67
-"Holo Rare" = 0.33
-"Holo Rare V" = 0.14
-"Holo Rare VMAX" = 0.06
-"Holo Rare VSTAR" = 0.06
-"Ultra Rare" = 0.09
+"Rare" = 0.51
+"Holo Rare" = 0.255
+"Holo Rare V" = 0.116
+"Holo Rare VMAX" = 0.044        # sets with VSTAR split this below
+"Ultra Rare" = 0.045            # full-art V 1:51 + full-art trainer 1:70 + alt art 1:201 (+ alt VMAX)
 "Secret Rare" = 0.03
-"Amazing Rare" = 0.04
+"Amazing Rare" = 0.04           # rough, ~1 in 25 (Vivid Voltage / Shining Fates)
 "Radiant Rare" = 0.05
 
-[eras.sv]
-bulk_per_pack = 0.15
+[eras.sv]                       # 2024-25 standard (TCGplayer, Temporal Forces 8,000+ packs; Card Codex, Journey Together):
+bulk_per_pack = 0.15            # DR 1:6, UR 1:15, IR 1:10, SIR 1:86, HR 1:139, ACE SPEC 1:20
 [eras.sv.rates]
-"Rare" = 1.0
-"Double rare" = 0.20
+"Rare" = 0.76
+"Double rare" = 0.167
 "Ultra Rare" = 0.067
-"Illustration rare" = 0.11
-"Special illustration rare" = 0.0115
-"Hyper rare" = 0.0053
+"Illustration rare" = 0.10
+"Special illustration rare" = 0.0116
+"Hyper rare" = 0.0072
 "ACE SPEC Rare" = 0.05
 
-# ---------------- Per-set overrides (special sets pull very differently) ----------------
+[eras.me]                       # 2025-26 Mega Evolution (TCGplayer Authentication Center, 5,000-8,500 packs per set:
+bulk_per_pack = 0.15            # DR 1:5, UR 1:12, IR 1:9, SIR 1:80, Mega Hyper Rare 1:1,000-1,800 by set)
+[eras.me.rates]
+"Rare" = 0.716
+"Double rare" = 0.2
+"Ultra Rare" = 0.083
+"Illustration rare" = 0.111
+"Special illustration rare" = 0.0125
+"Mega Hyper Rare" = 0.0009
 
-[sets."sv03.5".rates]          # 151
-"Rare" = 1.0
-"Double rare" = 0.20
-"Ultra Rare" = 0.063
-"Illustration rare" = 0.083
+[eras.op]                       # One Piece (English): 24 packs × 12 cards. Community box tallies, all rough (Bandai publishes
+bulk_per_pack = 0.3             # none): ~8 SR, ~4 L, ~0.7 SEC and ~2 parallel/alt arts per box; SP ~1 in 6 boxes;
+[eras.op.rates]                 # Manga rare and Treasure rare ~1 in 12 boxes (a case). TCGdex-style keys = TCGplayer rarities.
+"R" = 0.9
+"SR" = 0.33
+"L" = 0.17
+"SEC" = 0.03
+"R alt art" = 0.03
+"SR alt art" = 0.035
+"L alt art" = 0.015
+"SEC alt art" = 0.006
+"SP" = 0.007
+"Manga rare" = 0.0035
+"TR" = 0.0035
+"DON!!" = 0.04
+
+# ---------------- Per-set overrides ----------------
+
+[sets."me01".rates]            # Mega Evolution (TCGplayer: SIR 1:101, MHR 1:1,260)
+"Rare" = 0.716
+"Double rare" = 0.2
+"Ultra Rare" = 0.083
+"Illustration rare" = 0.111
+"Special illustration rare" = 0.0099
+"Mega Hyper Rare" = 0.0008
+[sets."me02.5".rates]          # Ascended Heroes (TCGplayer / PokeBeach 2,000+ packs: SIR 1:70, MHR 1:540, Mega Attack Rare 1:29;
+"Rare" = 0.68                  # god packs not counted)
+"Double rare" = 0.2
+"Ultra Rare" = 0.083
+"Illustration rare" = 0.111
+"Special illustration rare" = 0.0143
+"Mega Attack Rare" = 0.0345
+"Mega Hyper Rare" = 0.00185
+[sets."me03".rates]            # Perfect Order (TCGplayer: SIR 1:81, MHR 1:1,786)
+"Rare" = 0.716
+"Double rare" = 0.2
+"Ultra Rare" = 0.083
+"Illustration rare" = 0.111
+"Special illustration rare" = 0.0123
+"Mega Hyper Rare" = 0.00056
+[sets."me04".rates]            # Chaos Rising (TCGplayer 8,500 packs: SIR 1:100, MHR 1:1,000)
+"Rare" = 0.716
+"Double rare" = 0.2
+"Ultra Rare" = 0.083
+"Illustration rare" = 0.111
+"Special illustration rare" = 0.01
+"Mega Hyper Rare" = 0.001
+[sets."me05".rates]            # Pitch Black (TCGplayer: SIR 1:80, MHR 1:1,081)
+"Rare" = 0.716
+"Double rare" = 0.2
+"Ultra Rare" = 0.083
+"Illustration rare" = 0.111
+"Special illustration rare" = 0.0125
+"Mega Hyper Rare" = 0.00093
+# me02 Phantasmal Flames (SIR 1:80, MHR 1:1,260) and me06 Delta Reign (Nov 2026, small samples so far) use the era defaults.
+
+[sets."30th"]                  # 30th Celebration (TCGplayer 3,000+ packs: DR 1:5, IR 1:5, SIR 1:21, Futuristic Rare 1:120;
+bulk_per_pack = 0.15           # RGB Rare rough: none in 3,000 packs, community ~1:2,000-4,000). Last slot is always a Pikachu.
+[sets."30th".rates]
+"Rare" = 0.78
+"Double rare" = 0.21
+"Illustration rare" = 0.197
+"Special illustration rare" = 0.049
+"Futuristic Rare" = 0.0083
+"RGB Rare" = 0.0003
+"Pikachu Rare" = 1.0
+[sets."30th".extra_sets."30th-c"]           # Classic Collection, 1 in 10 packs (TCGplayer). "*" = every card: TCGdex gives
+"*" = 0.1                                   # these no rarity
+
+# 2023 Scarlet & Violet sets pulled their top rarities ~3x as often (TCGplayer, SV base 8,000+ packs:
+# DR 1:7, UR 1:15, IR 1:13, SIR 1:32, HR 1:54)
+[sets."sv01".rates]
+"Rare" = 0.77
+"Double rare" = 0.143
+"Ultra Rare" = 0.067
+"Illustration rare" = 0.077
 "Special illustration rare" = 0.031
-"Hyper rare" = 0.019
+"Hyper rare" = 0.0185
+[sets."sv02".rates]
+"Rare" = 0.77
+"Double rare" = 0.143
+"Ultra Rare" = 0.067
+"Illustration rare" = 0.077
+"Special illustration rare" = 0.031
+"Hyper rare" = 0.0185
+[sets."sv03".rates]
+"Rare" = 0.77
+"Double rare" = 0.143
+"Ultra Rare" = 0.067
+"Illustration rare" = 0.077
+"Special illustration rare" = 0.031
+"Hyper rare" = 0.0185
+[sets."sv04".rates]
+"Rare" = 0.77
+"Double rare" = 0.143
+"Ultra Rare" = 0.067
+"Illustration rare" = 0.077
+"Special illustration rare" = 0.031
+"Hyper rare" = 0.0185
 
-[sets."sv04.5".rates]          # Paldean Fates: baby shinies about 1 in 2 packs
-"Rare" = 1.0
-"Double rare" = 0.15
+[sets."sv03.5".rates]          # 151 (TCGplayer 1,500+ packs: IR 1:9, UR 1:16; community 700 packs: SIR 1:28-40)
+"Rare" = 0.78
+"Double rare" = 0.143
+"Ultra Rare" = 0.0625
+"Illustration rare" = 0.11
+"Special illustration rare" = 0.03
+"Hyper rare" = 0.0185
+
+[sets."sv04.5".rates]          # Paldean Fates (TCGplayer 1,500 packs: Shiny Rare 1:4, Shiny Ultra Rare 1:13; rest rough)
+"Rare" = 0.78
+"Double rare" = 0.143
 "Ultra Rare" = 0.05
 "Illustration rare" = 0.03
 "Special illustration rare" = 0.012
 "Hyper rare" = 0.006
-"Shiny rare" = 0.5
-"Shiny Ultra Rare" = 0.04
+"Shiny rare" = 0.25
+"Shiny Ultra Rare" = 0.077
 
-[sets."sv08.5".rates]          # Prismatic Evolutions
-"Rare" = 1.0
-"Double rare" = 0.18
-"Ultra Rare" = 0.06
-"Illustration rare" = 0.10
-"Special illustration rare" = 0.012
-"Hyper rare" = 0.008
+[sets."sv08.5".rates]          # Prismatic Evolutions (TCGplayer 1,200 packs: SIR 1:45, HR 1:125-180). No plain IRs:
+"Rare" = 0.76                  # TCGdex files all 32 art cards as SIR, and the 1:45 is for any of them.
+"Double rare" = 0.167
+"Ultra Rare" = 0.067
+"Special illustration rare" = 0.022
+"Hyper rare" = 0.0067
 "ACE SPEC Rare" = 0.05
 
-[sets."swsh12.5".rates]        # Crown Zenith main set
-"Rare" = 0.67
-"Holo Rare" = 0.33
-"Holo Rare V" = 0.12
-"Holo Rare VMAX" = 0.05
-"Holo Rare VSTAR" = 0.06
-"Ultra Rare" = 0.08
-"Secret Rare" = 0.02
+[sets."sv10.5b".rates]         # Black Bolt (rough: IRs about 1 in 3 packs, SIR ~1:60, Black White Rare ~1:250)
+"Rare" = 0.76
+"Double rare" = 0.167
+"Ultra Rare" = 0.067
+"Illustration rare" = 0.33
+"Special illustration rare" = 0.017
+"Black White Rare" = 0.004
+[sets."sv10.5w".rates]         # White Flare (same, rough)
+"Rare" = 0.76
+"Double rare" = 0.167
+"Ultra Rare" = 0.067
+"Illustration rare" = 0.33
+"Special illustration rare" = 0.017
+"Black White Rare" = 0.004
+
+# Sword & Shield sets with VSTAR cards: the 1:23 VMAX-or-VSTAR hit is mostly VSTAR (Lost Origin: 1 VMAX, 6 VSTAR)
+[sets."swsh9".rates]
+"Rare" = 0.51
+"Holo Rare" = 0.255
+"Holo Rare V" = 0.116
+"Holo Rare VMAX" = 0.012
+"Holo Rare VSTAR" = 0.032
+"Ultra Rare" = 0.045
+"Secret Rare" = 0.03
+[sets."swsh9".extra_sets."swsh9tg"]         # Trainer Gallery (TCGplayer, Lost Origin: 1 in 8 packs in all)
+"Rare" = 0.083
+"Ultra Rare" = 0.032
+"Secret Rare" = 0.009
+[sets."swsh10".rates]
+"Rare" = 0.51
+"Holo Rare" = 0.255
+"Holo Rare V" = 0.116
+"Holo Rare VMAX" = 0.012
+"Holo Rare VSTAR" = 0.032
+"Ultra Rare" = 0.045
+"Secret Rare" = 0.03
 "Radiant Rare" = 0.05
-[sets."swsh12.5".extra_sets."swsh12.5gg"]   # Galarian Gallery, about 1 in 3 packs
-"Rare" = 0.25
-"Ultra Rare" = 0.08
-"Secret Rare" = 0.01
-
-[sets."swsh4.5".rates]         # Shining Fates
-"Rare" = 0.67
-"Holo Rare" = 0.33
-"Holo Rare V" = 0.12
-"Holo Rare VMAX" = 0.05
-"Ultra Rare" = 0.06
-"Secret Rare" = 0.02
-"Amazing Rare" = 0.05
-[sets."swsh4.5".extra_sets."swsh4.5sv"]     # Shiny Vault, about 1 in 3 packs
-"Rare" = 0.25
-"Ultra Rare" = 0.06
-"Secret Rare" = 0.02
-
-[sets."sm115".rates]           # Hidden Fates
-"Rare" = 1.0
-"Ultra Rare" = 0.12
-"Secret Rare" = 0.02
-[sets."sm115".extra_sets."sma"]             # Shiny Vault, about 1 in 3 packs
-"Rare" = 0.25
-"Ultra Rare" = 0.07
-"Secret Rare" = 0.01
-
-# Trainer Gallery sub-sets (Brilliant Stars → Silver Tempest), about 1 in 3 packs
-[sets."swsh9".extra_sets."swsh9tg"]
-"Rare" = 0.2
-"Ultra Rare" = 0.12
-"Secret Rare" = 0.01
 [sets."swsh10".extra_sets."swsh10tg"]
-"Rare" = 0.2
-"Ultra Rare" = 0.12
-"Secret Rare" = 0.01
+"Rare" = 0.083
+"Ultra Rare" = 0.032
+"Secret Rare" = 0.009
+[sets."swsh10.5".rates]        # Pokémon GO
+"Holo Rare" = 0.765
+"Holo Rare V" = 0.116
+"Holo Rare VMAX" = 0.012
+"Holo Rare VSTAR" = 0.032
+"Ultra Rare" = 0.045
+"Secret Rare" = 0.03
+"Radiant Rare" = 0.05
+[sets."swsh11".rates]
+"Rare" = 0.51
+"Holo Rare" = 0.255
+"Holo Rare V" = 0.116
+"Holo Rare VMAX" = 0.012
+"Holo Rare VSTAR" = 0.032
+"Ultra Rare" = 0.045
+"Secret Rare" = 0.03
+"Radiant Rare" = 0.05
 [sets."swsh11".extra_sets."swsh11tg"]
-"Rare" = 0.2
-"Ultra Rare" = 0.12
+"Rare" = 0.083
+"Ultra Rare" = 0.032
+"Secret Rare" = 0.009
+[sets."swsh12".rates]
+"Rare" = 0.51
+"Holo Rare" = 0.255
+"Holo Rare V" = 0.116
+"Holo Rare VMAX" = 0.012
+"Holo Rare VSTAR" = 0.032
+"Ultra Rare" = 0.045
+"Secret Rare" = 0.03
+"Radiant Rare" = 0.05
+[sets."swsh12".extra_sets."swsh12tg"]       # TCGdex files this gallery under different rarity names
+"Holo Rare" = 0.083
+"Holo Rare V" = 0.013
+"Holo Rare VMAX" = 0.0075
+"Full Art Trainer" = 0.011
+"Secret Rare" = 0.009
+[sets."swsh12.5".rates]        # Crown Zenith main set
+"Rare" = 0.51
+"Holo Rare" = 0.255
+"Holo Rare V" = 0.116
+"Holo Rare VMAX" = 0.012
+"Holo Rare VSTAR" = 0.032
+"Ultra Rare" = 0.045
+"Secret Rare" = 0.03
+"Radiant Rare" = 0.05
+[sets."swsh12.5".extra_sets."swsh12.5gg"]   # Galarian Gallery (1,000-pack tally: 19 % / 10.5 % / 0.6 %)
+"Rare" = 0.19
+"Ultra Rare" = 0.105
+"Secret Rare" = 0.006
+
+[sets."swsh4.5".extra_sets."swsh4.5sv"]     # Shining Fates Shiny Vault (by analogy with Paldean / Hidden Fates: rough)
+"Shiny rare" = 0.25
+"Shiny rare V" = 0.08
+"Shiny rare VMAX" = 0.03
 "Secret Rare" = 0.01
-[sets."swsh12".extra_sets."swsh12tg"]
-"Rare" = 0.2
-"Ultra Rare" = 0.12
-"Secret Rare" = 0.01
+
+[sets."cel25".rates]           # Celebrations: 4-card packs, every card holo; split of the 3.6 non-Classic cards is rough
+"Rare" = 2.2
+"Holo Rare" = 0.8
+"Holo Rare V" = 0.35
+"Holo Rare VMAX" = 0.15
+"Ultra Rare" = 0.06
+"Secret Rare" = 0.04
+[sets."cel25".extra_sets."cel25cc"]         # Classic Collection, 1 in 2.5 packs (Card Codex model). "*" = every card:
+"*" = 0.4                                   # TCGdex gives these no rarity
+
+[sets."sm115".extra_sets."sma"]             # Hidden Fates Shiny Vault (2,350-pack tally: baby shiny 1:4, shiny GX 1:9,
+"Shiny rare" = 0.36                         # gold 1:57, full-art trainer 1:73). TCGdex files babies and GX together.
+"Secret Rare" = 0.03

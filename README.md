@@ -65,14 +65,37 @@ draft (defaults to NM). Tips: photograph straight-on, in focus, with the bottom 
 - **Card prices** — one search box (`charizard 199`, `sv08 238`, `199/165`, `Kingdra TG03`, `リザードン`), era filter,
   market overview (tracked cards, risers/fallers, watchlist with trend lines, recently viewed), card view with value
   by condition, history, live UK listings with photos, Watch, and **List this card →** (skips identification).
-- **Sealed EV**: a ranking of every English Booster Box / Elite Trainer Box / Booster Bundle back to XY. Each row:
+- **Sealed EV**: a ranking of every English Booster Box / Elite Trainer Box / Booster Bundle from Mega Evolution
+  (2025-26, incl. 30th Celebration) back to XY. Each row:
   stock product photo, **UK price** = median of recent eBay UK sales (`sold ×N`, 3+ sales) or a UK estimate from the
   cheaper current listings (`est.`) until then, **EV if opened** (estimated pull rates × UK card values), **profit
   if opened**, EV ÷ price and a verdict. "EV x % eBay-priced" says how much of the EV uses eBay card prices (the
   rest is a labelled Cardmarket stand-in until those cards have eBay data). Sealed sales are confirmed from listings
   that end sold and from units sold on multi-quantity listings. Photos come from TCGCSV (free daily mirror of
   TCGplayer's catalogue). Pull rates: `data/pull_rates.toml`; custom/Japanese sets: `data/sets.toml`.
-- **Deal finder** (Buy): two feeds, filled by a background scanner while the app runs.
+  Every row shows the **7-day and 30-day % change** of its UK price; the table view adds a 30-day sparkline, and
+  **EV ▸** / "Inside a set" draw the UK price over time (daily median of current UK listings, `ask_daily`).
+  **One Piece Booster Boxes** is its own tab: English OP/EB sets from TCGCSV (card list, rarities incl. parallel /
+  manga / SP arts, TCGplayer market prices → £ via the USD→GBP rate in Settings); the box price is eBay UK like
+  everything else; pull rates `[eras.op]` are rough community box tallies.
+  **EV ▸** on any row opens the working: every card inside with its picture, UK value and price basis, its rarity's
+  pull rate (1 in N packs), how many of it to expect in the product and its £ share of the EV. Pull rates are
+  community tallies (TCGplayer's where published; the file says which lines are rough); the Pokémon Company
+  publishes none. Sealed prices ignore other sets/series/languages with similar names, combo listings, risky
+  sellers and listings under 40 % of the product's sold value; 1-2 listings show as `thin` and rank last.
+- **Deal finder** (Buy): two feeds, filled by a background scanner while the app runs. A listing that looks like
+  a deal from its title gets one extra look (`getItem` + its photos): eBay's structured **Card Condition** (sellers
+  declare LP/MP there far more often than in the title) re-prices it against that condition's value, a description
+  that admits a crease or bend counts as MP, and **the photos decide for raw cards**: a listing with no photo of the
+  back, or whose back is photographed on a white background (whitening can't be seen), is ignored; with
+  `ANTHROPIC_API_KEY` set, Claude (`vision.GRADE_MODEL`, about 1-2p a listing) grades corners, edges, surface and
+  back from every photo, and a grade below the seller's wins (shown as `LP · photos` with a 📷 note of the wear
+  seen). Without a key only the back / white-background checks run and the seller's declared condition stands.
+  The scam checks drop a listing (seller under 95 % positive, a brand-new seller on a £50+ card, a lot, a
+  description saying proxy/reprint/replica, or a price under 20 % of market); softer signs (few feedback, under
+  35 % of market, one photo) show as a ⚠ chip. "Near mint / graded only" hides played cards. The same seller
+  checks apply to every listing used for pricing, and popular cards get a second search on eBay's condition so
+  declared-played listings sit in the played bucket.
   *Buy now*: the newest UK listings, card read from the title (or OCR of the photo), condition from eBay's
   condition + title, compared with market value. Listed when at or under 70 % of market (modern, XY onwards) /
   50 % (vintage), rare+, worth ≥ £5, with a solid eBay value. Each shows **profit and ROI** if resold at market

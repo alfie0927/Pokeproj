@@ -8,8 +8,8 @@ import streamlit as st
 from core import catalog, db, ebay, inventory, prices
 from ui.common import env_pills, esc, header, money, section, tiles
 
-ERA_FILTERS = {"All": None, "Scarlet & Violet": "sv", "Sword & Shield": "swsh", "Sun & Moon": "sm", "XY": "xy",
-               "Older": "old"}
+ERA_FILTERS = {"All": None, "Mega Evolution": "me", "Scarlet & Violet": "sv", "Sword & Shield": "swsh", "Sun & Moon": "sm",
+               "XY": "xy", "Older": "old"}
 
 
 def page():

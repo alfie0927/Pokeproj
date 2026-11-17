@@ -99,7 +99,8 @@ def read_card(front_path, back_path, client=None):
 # ---------------------------------------------------------------- Claude (paid, optional)
 
 def _jpeg_b64(path, max_edge=2576):
-    im = ImageOps.exif_transpose(Image.open(path)).convert("RGB")
+    im = path if isinstance(path, Image.Image) else ImageOps.exif_transpose(Image.open(path)).convert("RGB")
+    im = im.copy()
     im.thumbnail((max_edge, max_edge))
     buf = io.BytesIO()
     im.save(buf, "JPEG", quality=90)
@@ -119,6 +120,99 @@ def _claude(front_path, back_path, client=None):
     )
     if resp.stop_reason == "refusal" or resp.parsed_output is None:
         raise RuntimeError(f"Claude could not read this pair (stop_reason={resp.stop_reason})")
+    return resp.parsed_output
+
+
+# ---------------------------------------------------------------- Listing photos (Deal finder condition check)
+
+GRADE_MODEL = "claude-sonnet-5-5"   # ponytail: hundreds of listings a day; switch to claude-opus-5-5 if grades look soft
+GRADE_SYSTEM = """You grade raw (ungraded) Pokémon TCG cards from the photos of one eBay UK listing, for a buyer.
+Decide from what the photos actually show:
+- front_seen / back_seen: is the card's front / back shown clearly enough to judge (a real photo, not a stock image)?
+- white_background: are the card photos taken on a white or near-white surface, where edge whitening cannot be seen?
+- condition against eBay's ungraded definitions, from the corners, edges, surface and back:
+  NM: no visible wear beyond tiny factory imperfections. LP: minor edge/corner whitening or light surface scratches.
+  MP: noticeable whitening, scuffs, minor bends. HP: creases, bends, tears, heavy wear or water damage.
+  Be conservative: torn between two grades, pick the lower. null when the photos are too small, blurred or glary to judge.
+- notes: up to 3 short UK-English phrases naming the wear seen ("whitening on back corners", "scratch across the holo");
+  empty when none."""
+COND_ORDER = ["NM", "LP", "MP", "HP"]
+
+
+class PhotoGrade(BaseModel):
+    front_seen: bool
+    back_seen: bool
+    white_background: bool
+    condition: Optional[Literal["NM", "LP", "MP", "HP"]]
+    notes: list[str]
+
+
+def photo_urls(item, limit=6):
+    """Pure. Full-size photo URLs of a Browse item (main first), at most `limit`."""
+    urls = [(item.get("image") or {}).get("imageUrl")] + [i.get("imageUrl") for i in item.get("additionalImages") or []]
+    return [u.replace("s-l225", "s-l1600") for u in urls if u][:limit]
+
+
+def fetch_photo(url, max_edge=1200):
+    from . import ebay
+    r = ebay._http.get(url, timeout=15)
+    r.raise_for_status()
+    im = ImageOps.exif_transpose(Image.open(io.BytesIO(r.content))).convert("RGB")
+    im.thumbnail((max_edge, max_edge))
+    return im
+
+
+def is_card_back(im):
+    """Pure. Card backs are the one shared design: a blue-dominant centre. On real listing photos backs score
+    0.42-0.67 bluish pixels and fronts (incl. pink / red / green cards) at most 0.22."""
+    import numpy as np
+    w, h = im.size
+    a = np.asarray(im.crop((w // 8, h // 8, w - w // 8, h - h // 8))).astype(int)
+    bluish = (a[..., 2] > a[..., 0] + 15) & (a[..., 2] >= a[..., 1])
+    # ponytail: a blue full-art front can pass and a back shot under warm light in a sleeve can fail; Claude's
+    # back_seen wins when a key is set
+    return bool(bluish.mean() > 0.32)
+
+
+def on_white(im):
+    """Pure. Photo taken on a white / near-white surface (the outer 6 % of the frame): edge whitening can't be seen."""
+    import numpy as np
+    a = np.asarray(im).astype(int)
+    h, w = a.shape[:2]
+    m = max(2, int(min(h, w) * 0.06))
+    border = np.concatenate([a[:m].reshape(-1, 3), a[-m:].reshape(-1, 3), a[:, :m].reshape(-1, 3), a[:, -m:].reshape(-1, 3)])
+    white = (border.min(1) > 185) & (border.max(1) - border.min(1) < 40)
+    return bool(white.mean() > 0.6)
+
+
+def photo_verdict(backs, whites, grade, declared):
+    """Pure. backs/whites: per-photo heuristics; grade: PhotoGrade or None; declared: NM/LP/MP/HP from eBay/title.
+    Returns (reason the listing is ignored or None, condition, notes). No back photo -> ignored; back shown on a white
+    background -> ignored; a photo grade below the declared one wins (a seller's 'NM' does not beat visible wear)."""
+    back = grade.back_seen if grade else any(backs)
+    white = grade.white_background if grade else any(w for b, w in zip(backs, whites) if b)
+    if not back:
+        return "no photo of the back", declared, []
+    if white:
+        return "photos on a white background (whitening can't be seen)", declared, []
+    notes = list(grade.notes) if grade else []
+    if grade and grade.condition and COND_ORDER.index(grade.condition) > COND_ORDER.index(declared):
+        return None, grade.condition, notes
+    return None, declared, notes
+
+
+def grade_photos(images, client=None):
+    """Claude looks at every photo of the listing (needs ANTHROPIC_API_KEY). images: PIL images."""
+    import anthropic
+    client = client or anthropic.Anthropic()
+    imgs = [{"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": _jpeg_b64(im, 1200)}}
+            for im in images]
+    resp = client.messages.parse(
+        model=GRADE_MODEL, max_tokens=1500, system=GRADE_SYSTEM, output_format=PhotoGrade,
+        messages=[{"role": "user", "content": [*imgs, {"type": "text", "text": f"The {len(images)} photos of one listing. Grade the card."}]}],
+    )
+    if resp.stop_reason == "refusal" or resp.parsed_output is None:
+        raise RuntimeError(f"Claude could not grade these photos (stop_reason={resp.stop_reason})")
     return resp.parsed_output
 
 

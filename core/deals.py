@@ -143,6 +143,62 @@ def judge_item(item, card, lang, cond, refresh_ok):
     return key, name_en, total, val, basis, (total / val if val else None), stats
 
 
+COND_LABEL = {"NM": "near mint", "LP": "lightly played", "MP": "moderately played", "HP": "heavily played"}
+
+
+def cond_text(cond):
+    """Pure. ('PSA', '10', None) -> 'PSA 10'; (None, None, 'LP') -> 'LP'."""
+    return f"{cond[0]} {cond[1]}" if cond and cond[0] else (cond[2] if cond else None)
+
+
+def photo_check(full, declared):
+    """A raw card's own photos decide: (reason to ignore the listing or None, condition, notes). Free checks first
+    (a back photo must exist and not sit on a white background); then, with ANTHROPIC_API_KEY set, Claude grades the
+    corners / edges / surface from the photos and a grade below the declared one wins. Photo problems never hide a
+    listing by accident: download or grading errors fall back to the declared condition."""
+    ims = []
+    for u in vision.photo_urls(full):
+        try:
+            ims.append(vision.fetch_photo(u))
+        except Exception:
+            pass
+    if not ims:
+        return None, declared, []
+    backs, whites = [vision.is_card_back(i) for i in ims], [vision.on_white(i) for i in ims]
+    grade = None
+    if os.environ.get("ANTHROPIC_API_KEY") and vision.photo_verdict(backs, whites, None, declared)[0] is None:
+        try:
+            grade = vision.grade_photos(ims)
+        except Exception as e:
+            db.set_setting("last_grade_error", f"{full.get('itemId')}: {e}"[:300])
+    return vision.photo_verdict(backs, whites, grade, declared)
+
+
+def verify(item, key, cond, val, mstats, basis):
+    """One getItem on a listing that already looks like a deal (a few per pass, not every listing): eBay's structured
+    condition, which sellers fill in far more often than the title, then the listing's photos (photo_check), plus the
+    full description for the scam checks. A played card priced against its real condition is no longer a 'deal'.
+    Returns (full item or None when gone, cond, val, mstats, basis, note, reason to ignore or None, photo notes)."""
+    full = ebay.get_item(item["itemId"])
+    if not full:
+        return None, cond, val, mstats, basis, "gone", None, []
+    c, new, note, drop, notes = ebay.condition_from_item(full), cond, "", None, []
+    if c and c["graded"] and c["grader"] and c["grade"]:
+        new = (c["grader"], c["grade"], None)
+    elif c and not c["graded"]:
+        new = (None, None, c["condition"])
+    if new != cond:
+        note = (cond_text(new) if new[0] else COND_LABEL[new[2]]) + " by eBay's condition" \
+            + (" (description admits damage)" if c.get("downgraded") else "")
+    if not new[0]:   # raw card: front + back photos, not on white, and the photo grade when it is worse
+        drop, pcond, notes = photo_check(full, new[2])
+        if pcond != new[2]:
+            new, note = (None, None, pcond), f"{COND_LABEL[pcond]} by the photos"
+    if new != cond:
+        val, mstats, basis = prices.market_for(key, *new)
+    return full, new, val, mstats, basis, note, drop, notes
+
+
 def _identify(item):
     try:
         return identify_title(item["title"])
@@ -172,14 +228,14 @@ def by_card(hits):
 
 def judge_all(hits, refresh_ok):
     """Value listings 6 cards at a time (the wait is eBay, not this PC).
-    Yields (item, card, lang, judge_item's tuple or the Exception it raised)."""
+    Yields (item, card, lang, cond, judge_item's tuple or the Exception it raised)."""
     def group(g):
         out = []
         for it, card, lang, cond in g:
             try:
-                out.append((it, card, lang, judge_item(it, card, lang, cond, refresh_ok)))
+                out.append((it, card, lang, cond, judge_item(it, card, lang, cond, refresh_ok)))
             except Exception as e:   # one bad listing must not stop the scan
-                out.append((it, card, lang, e))
+                out.append((it, card, lang, cond, e))
         return out
     with ThreadPoolExecutor(6) as ex:
         for res in ex.map(group, by_card(hits)):
@@ -221,31 +277,46 @@ def scan(ocr=True, ocr_budget=8, refresh_budget=None, progress=None, max_items=2
         if progress:
             progress(done[0] / len(new), it["title"][:60])
 
-    def record(it, card, lang, judged):
+    def record(it, card, lang, cond, judged):
         """Save the listing as a deal if it is one. Returns the line shown for it in deal_seen."""
         stats["identified"] += 1
         if isinstance(judged, Exception):
             return f"error: {judged}"[:120]
         key, name_en, total, val, basis, ratio, mstats = judged
         s = card.get("set") or {}
-        profit, roi = flip(total, val) if val else (None, None)
-        if ratio and ratio <= threshold_for(s.get("id")) and val >= min_market and prices.solid(mstats):
-            prices.follow(key, 3, "deal")
-            if db.setting("deal_alert") and profit is not None and profit >= float(db.setting("deal_min_profit")):
-                notify(f"Deal: {name_en} £{total:.2f}", f"Market £{val:.2f} · profit £{profit:.2f} · "
-                       f"{ratio:.0%} of market", it.get("itemWebUrl"))
-            stats["deals"] += 1
-            loc = it.get("itemLocation") or {}
-            db.run("INSERT OR REPLACE INTO deals (item_id, found_at, card_key, name, set_name, number, bucket, "
-                   "title, total, market, basis, ratio, image, url, status, era, listed_at, location, rarity, "
-                   "profit, roi) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,'new',?,?,?,?,?,?)",
-                   (it["itemId"], stats["at"], key, name_en, s.get("name"), catalog.printed_number(card),
-                    prices.ask_bucket(it), it["title"], total, val, basis.split("· ")[-1], ratio,
-                    (it.get("image") or {}).get("imageUrl"), it.get("itemWebUrl"),
-                    "modern" if is_modern(s.get("id")) else "vintage", it.get("itemCreationDate"),
-                    " ".join(x for x in (loc.get("city"), loc.get("postalCode"), loc.get("country")) if x),
-                    card.get("rarity"), profit, roi))
-        return f"{name_en}: {ratio:.0%} of market ({basis.split('· ')[-1]})" if ratio else f"{name_en}: no market value"
+        th = threshold_for(s.get("id"))
+        is_deal = lambda: bool(ratio) and ratio <= th and val >= min_market and prices.solid(mstats)
+        if not is_deal():
+            return f"{name_en}: {ratio:.0%} of market ({basis.split('· ')[-1]})" if ratio else f"{name_en}: no market value"
+        # looks like a deal from the title alone: now one getItem for the declared condition and the scam checks
+        full, cond, val, mstats, basis, note, drop, notes = verify(it, key, cond, val, mstats, basis)
+        if full is None:
+            return f"{name_en}: gone before it could be checked"
+        ratio = total / val if val else None
+        if not is_deal():
+            return f"{name_en}: {note or 'condition'}, " + (f"{ratio:.0%} of market" if ratio else "no market value")
+        if drop:
+            return f"{name_en}: {ratio:.0%} of market but {drop} (not shown)"
+        hard, soft = ebay.listing_risk(full, total, val)
+        if hard:
+            return f"{name_en}: {ratio:.0%} of market but {hard[0]} (not shown)"
+        profit, roi = flip(total, val)
+        prices.follow(key, 3, "deal")
+        if db.setting("deal_alert") and profit >= float(db.setting("deal_min_profit")):
+            notify(f"Deal: {name_en} £{total:.2f}", f"Market £{val:.2f} · profit £{profit:.2f} · "
+                   f"{ratio:.0%} of market", it.get("itemWebUrl"))
+        stats["deals"] += 1
+        loc = it.get("itemLocation") or {}
+        db.run("INSERT OR REPLACE INTO deals (item_id, found_at, card_key, name, set_name, number, bucket, "
+               "title, total, market, basis, ratio, image, url, status, era, listed_at, location, rarity, "
+               "profit, roi, condition, risk, notes) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,'new',?,?,?,?,?,?,?,?,?)",
+               (it["itemId"], stats["at"], key, name_en, s.get("name"), catalog.printed_number(card),
+                prices.ask_bucket(it), it["title"], total, val, basis.split("· ")[-1], ratio,
+                (it.get("image") or {}).get("imageUrl"), it.get("itemWebUrl"),
+                "modern" if is_modern(s.get("id")) else "vintage", it.get("itemCreationDate"),
+                " ".join(x for x in (loc.get("city"), loc.get("postalCode"), loc.get("country")) if x),
+                card.get("rarity"), profit, roi, cond_text(cond), "; ".join(soft) or None, "; ".join(notes) or None))
+        return f"{name_en}: {ratio:.0%} of market ({basis.split('· ')[-1]})" + (f" · {note}" if note else "")
 
     def skipped(card):
         return f"{card['name']}: {card['rarity'].lower()}, skipped"
@@ -269,9 +340,9 @@ def scan(ocr=True, ocr_budget=8, refresh_budget=None, progress=None, max_items=2
         else:
             todo.append((it, hit[0], hit[1], cond))
     # 2. value the rare+ ones side by side: title-identified deals land within seconds of the pass starting
-    for it, card, lang, judged in judge_all(todo, take):
+    for it, card, lang, cond, judged in judge_all(todo, take):
         try:
-            mark(it, record(it, card, lang, judged))
+            mark(it, record(it, card, lang, cond, judged))
         except Exception as e:   # one bad listing must not stop the scan
             mark(it, f"error: {e}"[:120])
     # 3. photos last (2-5 s each), so they never hold up the deals above; capped so the next pass starts on time
@@ -290,7 +361,7 @@ def scan(ocr=True, ocr_budget=8, refresh_budget=None, progress=None, max_items=2
                     judged = judge_item(it, hit[0], hit[1], cond, take)
                 except Exception as e:
                     judged = e
-                result = record(it, hit[0], hit[1], judged)
+                result = record(it, hit[0], hit[1], cond, judged)
         except Exception as e:
             result = f"error: {e}"[:120]
         mark(it, result)
@@ -375,7 +446,7 @@ def scan_auctions(pages=2):
         if isinstance(hit, tuple) and cond and hit[0].get("rarity") not in BULK:
             bid = float((it.get("currentBidPrice") or it.get("price") or {}).get("value") or 0)
             todo.append(({**it, "price": {"value": bid}}, hit[0], hit[1], cond))   # auctions carry no 'price'
-    for it, card, lang, judged in judge_all(todo, lambda: prices.budget_left() > 1000):
+    for it, card, lang, cond, judged in judge_all(todo, lambda: prices.budget_left() > 1000):
         try:
             if isinstance(judged, Exception):
                 raise judged
@@ -384,13 +455,25 @@ def scan_auctions(pages=2):
             post = prices._ship(it)
             s = card.get("set") or {}
             th = threshold_for(s.get("id"))
-            if not (val and val >= min_market and prices.solid(mstats) and bid + post <= th * val):
+            under = lambda: val and val >= min_market and prices.solid(mstats) and bid + post <= th * val
+            known = db.q("SELECT condition, risk, notes FROM auctions WHERE item_id=?", (it["itemId"],))
+            risk, notes = (known[0]["risk"], known[0]["notes"]) if known else (None, None)
+            if under() and not known:   # first time under the line: one getItem for the condition, photos + scam checks
+                full, cond, val, mstats, basis, _, drop, pnotes = verify(it, key, cond, val, mstats, basis)
+                hard, soft = ebay.listing_risk(full, bid + post, val) if full else (["gone"], [])
+                risk, notes = "; ".join(soft) or None, "; ".join(pnotes) or None
+                if hard or drop:
+                    continue
+            elif known:
+                cond = known[0]["condition"]
+            if not under():
                 db.run("DELETE FROM auctions WHERE item_id=?", (it["itemId"],))   # bid has gone past the line
                 continue
             loc = it.get("itemLocation") or {}
             db.run("""INSERT INTO auctions (item_id, found_at, card_key, name, set_name, number, bucket, rarity, era,
-                      title, bid, bids, postage, market, basis, ratio, max_bid, image, url, end_at, location)
-                      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(item_id) DO UPDATE SET
+                      title, bid, bids, postage, market, basis, ratio, max_bid, image, url, end_at, location,
+                      condition, risk, notes)
+                      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(item_id) DO UPDATE SET
                       bid=excluded.bid, bids=excluded.bids, market=excluded.market, basis=excluded.basis,
                       ratio=excluded.ratio, max_bid=excluded.max_bid""",
                    (it["itemId"], now.isoformat(timespec="seconds"), key, name_en, s.get("name"),
@@ -398,7 +481,8 @@ def scan_auctions(pages=2):
                     "modern" if is_modern(s.get("id")) else "vintage", it["title"], bid, int(it.get("bidCount") or 0),
                     post, val, basis.split("· ")[-1], (bid + post) / val, max_bid(val, th, post),
                     (it.get("image") or {}).get("imageUrl"), it.get("itemWebUrl"), end.isoformat(),
-                    " ".join(x for x in (loc.get("city"), loc.get("postalCode")) if x)))
+                    " ".join(x for x in (loc.get("city"), loc.get("postalCode")) if x),
+                    cond if isinstance(cond, str) else cond_text(cond), risk, notes))
             out["kept"] += 1
         except Exception as e:   # one bad listing must not stop the scan
             db.set_setting("last_auction_error", f"{it.get('itemId')}: {e}"[:300])

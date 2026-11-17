@@ -46,7 +46,7 @@ def set_(lang, set_id):
     return _get(f"/{lang}/sets/{quote(set_id)}")
 
 
-ERAS = {"sv": "Scarlet & Violet", "swsh": "Sword & Shield", "sm": "Sun & Moon", "xy": "XY"}
+ERAS = {"me": "Mega Evolution", "sv": "Scarlet & Violet", "swsh": "Sword & Shield", "sm": "Sun & Moon", "xy": "XY"}
 
 
 def sets_index(lang="en"):
@@ -60,15 +60,15 @@ def series_sets(series_id, lang="en"):
 
 
 def era_of(set_id):
-    """'sv08' -> 'sv', 'swsh12.5gg' -> 'swsh', 'sm115' -> 'sm', 'xy7' -> 'xy'; None if unknown. Pure."""
-    for e in ("swsh", "sv", "sm", "xy"):
+    """'me01' / '30th' -> 'me', 'sv08' -> 'sv', 'swsh12.5gg' -> 'swsh', 'sm115' -> 'sm', 'xy7' -> 'xy'; None if unknown. Pure."""
+    for e in ("swsh", "sv", "sm", "xy", "me", "30th"):   # 30th Celebration (2026) sits in TCGdex's Mega Evolution series
         if set_id.lower().startswith(e):
-            return e
+            return "me" if e == "30th" else e
     return None
 
 
 _JA = re.compile(r"[぀-ヿ一-鿿]")
-_SET = re.compile(r"^(?:sv|swsh|sm|xy)[\w.]*$|^s\d{1,2}[a-z]?$", re.I)
+_SET = re.compile(r"^(?:sv|swsh|sm|xy|me)[\w.]*$|^s\d{1,2}[a-z]?$", re.I)
 _NUM = re.compile(r"^(?:[A-Za-z]{1,4})?\d{1,3}(?:/[A-Za-z]{0,4}\d{1,3})?$")
 
 

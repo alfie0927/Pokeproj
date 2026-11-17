@@ -86,10 +86,14 @@ def buy_now(rows):
         db.set_setting("deal_min_profit", min_profit)
     sold_only = c3.toggle("Sold-price backed only", key="deal_sold_only",
                           help="Hide deals valued from current UK listings; keep ones valued from real sales.")
+    nm_only = c3.toggle("Near mint / graded only", True, key="deal_nm_only",
+                        help="Hide played cards (eBay's declared condition or the title). Played deals are priced "
+                             "against the played value, so they are real deals too, just harder to resell.")
     for r in rows:   # deals from before profit was stored
         if r["profit"] is None and r["market"]:
             r["profit"], r["roi"] = deals.flip(r["total"], r["market"])
-    rows = [r for r in rows if (r["profit"] or 0) >= min_profit and (not sold_only or "sold" in (r["basis"] or ""))]
+    rows = [r for r in rows if (r["profit"] or 0) >= min_profit and (not sold_only or "sold" in (r["basis"] or ""))
+            and (not nm_only or not played(r))]
     if SORTS[sort]:
         rows.sort(key=lambda r: (r[SORTS[sort]] or 0), reverse=SORTS[sort] != "ratio")
     if not rows:
@@ -106,7 +110,7 @@ def buy_now(rows):
                 st.markdown(f"**{esc(r['name'])}** · {esc(r['set_name'] or '')} · {esc(r['number'] or '')}")
                 st.html(chip(f"{r['ratio']:.0%} of market", "good" if r["ratio"] <= 0.5 else "info")
                         + chip(r["basis"] or "", "good" if "sold" in (r["basis"] or "") else "")
-                        + chip(speed(r["card_key"], r["bucket"]), "") + chip(r["bucket"] or "", "")
+                        + chip(speed(r["card_key"], r["bucket"]), "") + cond_chip(r) + risk_chip(r)
                         + chip(r["rarity"] or "", "") + chip(r["era"] or "", "warn" if r["era"] == "vintage" else "")
                         + chip("listed " + fmt_age(r["listed_at"]) if r["listed_at"] else "found " + fmt_age(r["found_at"]), "")
                         + chip(r["location"] or "UK", ""))
@@ -126,6 +130,8 @@ def buy_now(rows):
 def auction_list(rows):
     st.caption("UK auctions ending soon where the current bid + postage is under your threshold. **Max bid** keeps the "
                "total at or under that line. The app never bids; open the auction to bid yourself.")
+    if st.toggle("Near mint / graded only", True, key="auc_nm_only"):
+        rows = [r for r in rows if not played(r)]
     if not rows:
         last = db.setting("last_auction_scan") or {}
         st.info(f"No auctions under the line right now (last check {fmt_age(last.get('at'))}, "
@@ -143,7 +149,7 @@ def auction_list(rows):
                 st.html(chip(f"ends in {mins:.0f} min" if mins < 90 else f"ends in {mins / 60:.1f} h",
                              "bad" if mins < 15 else "warn" if mins < 60 else "info")
                         + chip(f"{r['bids']} bid{'s' * (r['bids'] != 1)}", "") + chip(r["basis"] or "", "good" if "sold" in (r["basis"] or "") else "")
-                        + chip(speed(r["card_key"], r["bucket"]), "") + chip(r["bucket"] or "", "")
+                        + chip(speed(r["card_key"], r["bucket"]), "") + cond_chip(r) + risk_chip(r)
                         + chip(r["era"] or "", "warn" if r["era"] == "vintage" else "") + chip(r["location"] or "UK", ""))
                 profit, roi = deals.flip(r["bid"] + r["postage"], r["market"])
                 st.markdown(f"<span style='font-size:1.4rem;font-weight:700'>{money(r['bid'])}</span> "
@@ -166,6 +172,24 @@ def price_line(total, market, profit, roi):
             f"<span style='color:var(--muted)'>delivered · market {money(market)} · profit "
             f"<b style='color:{colour}'>{money(profit)}</b>"
             + (f" ({roi:.0%} ROI)" if roi is not None else "") + "</span>")
+
+
+def played(r):
+    """Raw card not declared near mint (eBay's condition when checked, else the title)."""
+    c = r.get("condition")
+    return c in ("LP", "MP", "HP") if c else r.get("bucket") == "Raw played"
+
+
+def cond_chip(r):
+    c = r.get("condition")
+    if not c:
+        return chip(r["bucket"] or "", "")
+    return chip(c + ("" if " " in c else " · photos" if r.get("notes") else " · eBay condition"), "warn" if c in ("LP", "MP", "HP") else "")
+
+
+def risk_chip(r):
+    out = chip("⚠ " + r["risk"], "warn") if r.get("risk") else ""
+    return out + (chip("📷 " + r["notes"], "warn") if r.get("notes") else "")
 
 
 def speed(card_key, bucket):

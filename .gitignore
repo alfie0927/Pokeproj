@@ -2,5 +2,6 @@
 __pycache__/
 *.pyc
 data/app.db*
+data/*.db
 data/uploads/
 .streamlit/secrets.toml

@@ -176,10 +176,18 @@ def _has_any(t, words):
     return bool(words) and _words_re(tuple(words)).search(t) is not None
 
 
+def _required(t, w):
+    """Pure. A required phrase is present; '(op09,op-09)' means any of the alternatives (eBay's OR group syntax)."""
+    w = w.lower()
+    if w.startswith("(") and w.endswith(")"):
+        return any(a.strip() in t for a in w[1:-1].split(","))
+    return w in t
+
+
 def title_ok(title, required=(), excluded=TITLE_JUNK, number=None, lang=None):
     """Does an active-listing title describe this exact card/product?"""
     t = title.lower()
-    if _has_any(t, excluded) or not all(w.lower() in t for w in required):
+    if _has_any(t, excluded) or not all(_required(t, w) for w in required):
         return False
     if number:
         left, _, total = number.lower().partition("/")
@@ -230,9 +238,11 @@ def _ship(item):
 
 
 def refresh_asks(card_key, query, check, fixed_bucket=None, condition_ids=None, category=ebay.CATEGORY, force=False,
-                 buying="FIXED_PRICE", stale_hours=None):
+                 buying="FIXED_PRICE", stale_hours=None, ref=None):
     """Snapshot today's active UK listings (asks) and remember each one in `tracked` so we can later see if it sold.
-    buying='AUCTION' only tracks (current bids aren't asking prices). check(title)->bool. Returns True if fetched."""
+    buying='AUCTION' only tracks (current bids aren't asking prices). check(title)->bool. Returns True if fetched.
+    ref: an outside reference price for sealed products (TCGplayer's box price); listings under 40 % of it are
+    dropped even when they outnumber the real ones (UK eBay's £10 'sealed booster box' scam listings)."""
     fkey = ("ask:" if buying == "FIXED_PRICE" else "auc:") + card_key
     if not force:
         r = db.q("SELECT fetched_at FROM fetches WHERE card_key=?", (fkey,))
@@ -246,15 +256,23 @@ def refresh_asks(card_key, query, check, fixed_bucket=None, condition_ids=None, 
         if not (b and check(it["title"])):
             continue
         price = float((it.get("currentBidPrice") or it["price"])["value"])
+        if risky_seller(it, price):
+            continue                        # likely fake/scam: never a price point or a "sale"
         if buying == "FIXED_PRICE":
             asks.append((it["itemId"], now.date().isoformat(), card_key, b, it["title"], round(price + _ship(it), 2),
                          it.get("itemWebUrl"), (it.get("image") or {}).get("imageUrl")))
         track.append((it["itemId"], card_key, b, it["title"], price, _ship(it), it.get("itemWebUrl"), buying,
                       it.get("itemEndDate"), now.isoformat(), now.isoformat()))
     if fixed_bucket == "Sealed":
-        asks = drop_cheap(asks, 5)          # accessories that slipped past the title filter
+        sold = (values(card_key).get("Sealed") or {}).get("market")
+        asks = drop_cheap(asks, 5, ref=max(filter(None, [ref, sold]), default=None))   # accessories/fakes/scams
         kept = {a[0] for a in asks}
         track = [t for t in track if t[0] in kept]   # an accessory must never become a "sale"
+    elif buying == "FIXED_PRICE" and category == ebay.CATEGORY and sum(a[3] == "Raw" for a in asks) >= 8:
+        # one more search (eBay's structured condition) on cards with enough raw listings for the mix to matter:
+        # ~5 % of 'NM-looking' titles are declared LP/MP there, and they sit at the cheap end that sets the value
+        played = {i["itemId"] for i in ebay.search_active(query, condition_ids, category=category, aspect=ebay.PLAYED_ASPECT)}
+        asks, track = rebucket_played(asks, track, played)
     db.many("INSERT OR REPLACE INTO asks (item_id, seen_on, card_key, bucket, title, total, url, image) "
             "VALUES (?,?,?,?,?,?,?,?)", asks)
     db.many(TRACK_UPSERT, track)
@@ -528,15 +546,29 @@ def sync_own_sales():
 MULTI = re.compile(r"\b\d+\s*[x×]\b|\b[x×]\s*\d+\b|\b(?:[2-9]|1\d)\s*-\s*pack\b|\b(?:two|twin|2)\s+pack\b", re.I)
 
 
-def sealed_title_ok(title, inc, exc):
-    """Pure. A sealed product listing: required words present, no junk/excluded words, not a multiple."""
-    return title_ok(title, inc, SEALED_JUNK + tuple(exc)) and not MULTI.search(title)
+def sealed_title_ok(title, inc, exc, lang=None):
+    """Pure. A sealed product listing: required words present, no junk/excluded words, not a multiple; English
+    products also reject other-language copies ('Indonesian Team Up Booster Box')."""
+    return title_ok(title, inc, SEALED_JUNK + tuple(exc), lang="en" if lang == "en" else None) and not MULTI.search(title)
 
 
-def refresh_sealed_asks(card_key, ebay_query, force=False):
+def refresh_sealed_asks(card_key, ebay_query, force=False, exclude=(), ref=None):
+    """exclude: extra title phrases meaning another product (other sets/series), from ev.conflicts();
+    ref: outside reference price (see refresh_asks)."""
     q, inc, exc = parse_query(ebay_query)
-    return refresh_asks(card_key, q, lambda t: sealed_title_ok(t, inc, exc),
-                        fixed_bucket="Sealed", condition_ids=["1000"], category=None, force=force)
+    lang = card_key.split(":")[1]
+    return refresh_asks(card_key, q, lambda t: sealed_title_ok(t, inc, exc + list(exclude), lang),
+                        fixed_bucket="Sealed", condition_ids=["1000"], category=None, force=force, ref=ref)
+
+
+risky_seller = ebay.risky_seller
+
+
+def rebucket_played(asks, track, played_ids):
+    """Pure. Listings eBay's own 'Card Condition' says are played move to the 'Raw played' bucket (asks tuple
+    index 3, tracked tuple index 2), whatever the title said."""
+    fix = lambda row, i: row[:i] + ("Raw played",) + row[i + 1:] if row[0] in played_ids and row[i] == "Raw" else row
+    return [fix(a, 3) for a in asks], [fix(t, 2) for t in track]
 
 
 def remember_card(lang, c, name_en=None):
@@ -549,12 +581,13 @@ def remember_card(lang, c, name_en=None):
             datetime.now(timezone.utc).isoformat()))
 
 
-def drop_cheap(rows, total_idx, floor=0.4):
-    """Pure. Sealed listings priced under 40% of the median are accessories/parts, not the product."""
+def drop_cheap(rows, total_idx, floor=0.4, ref=None):
+    """Pure. Sealed listings priced under 40% of the median are accessories/parts/fakes, not the product.
+    ref: the product's recent sold value, which also judges a lone listing (a £150 'vintage box' vs £900 sales)."""
     totals = [r[total_idx] for r in rows]
-    if len(totals) < 3:
+    if not ref and len(totals) < 3:
         return rows
-    med = statistics.median(totals)
+    med = max(ref or 0, statistics.median(totals) if len(totals) >= 3 else 0)
     return [r for r in rows if r[total_idx] >= floor * med]
 
 

@@ -68,7 +68,13 @@ MIGRATIONS = ["ALTER TABLE sales ADD COLUMN source TEXT DEFAULT 'soldcomps'",
               "ALTER TABLE products ADD COLUMN sold_n INTEGER",
               "ALTER TABLE products ADD COLUMN ebay_share REAL",
               "ALTER TABLE deals ADD COLUMN profit REAL",
-              "ALTER TABLE deals ADD COLUMN roi REAL"]
+              "ALTER TABLE deals ADD COLUMN roi REAL",
+              "ALTER TABLE deals ADD COLUMN condition TEXT",
+              "ALTER TABLE deals ADD COLUMN risk TEXT",
+              "ALTER TABLE auctions ADD COLUMN condition TEXT",
+              "ALTER TABLE auctions ADD COLUMN risk TEXT",
+              "ALTER TABLE deals ADD COLUMN notes TEXT",
+              "ALTER TABLE auctions ADD COLUMN notes TEXT"]
 
 DEFAULTS = {
     "strategy": "market",          # market | lowest
@@ -80,6 +86,7 @@ DEFAULTS = {
     "stale_hours": 24,            # asking-price snapshots (free)
     "sold_stale_hours": 168,      # SoldComps sold comps (free tier is small)
     "eur_gbp": 0.85,               # Cardmarket EU reference only (shown, never used for prices)
+    "usd_gbp": 0.75,               # TCGplayer market prices -> £ (One Piece card values in Sealed EV)
     "browse_budget": 4500,
     "postage_cost": 1.55,          # what posting a card costs YOU when you resell it (deal profit)
     "sell_fee_pct": 0.0,           # selling fee % (UK private sellers: 0; buyers pay eBay's protection fee)
