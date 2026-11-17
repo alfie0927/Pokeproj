@@ -90,7 +90,8 @@ def needs_reprice(old, new_price, changed_card, changed_cond, reprice_clicked):
 
 def price_draft(d, strategy, pct):
     """(Re)compute market, lowest listing and price for a draft dict in place.
-    eBay data only: inferred/real sold prices, else the low quartile of today's UK asks (see prices.market_for)."""
+    Market = median of a live eBay UK search for '<name> <number>' (prices.searched_market); tracked sold/asks
+    (prices.market_for) only when that search finds nothing."""
     card_key, lang = d.get("card_key"), d["language"]
     market, stats, basis = (None, None, None)
     first = d["name"].split(" ")[0]
@@ -110,8 +111,13 @@ def price_draft(d, strategy, pct):
         except ebay.EbayError as e:
             d.setdefault("errors", []).append(str(e))
         prices.follow(card_key, 3, "draft", d["name"], d["number"])
-        market, stats, basis = prices.market_for(card_key, d["grader"] if d["graded"] else None, d["grade"],
-                                                 d["condition"])
+    grader = d["grader"] if d["graded"] else None
+    try:   # market = live eBay search for 'name number' (e.g. 'Charizard ex 183/165')
+        market, stats, basis = prices.searched_market(d["name"], d["number"], lang, grader, d["grade"], d["condition"])
+    except (ebay.EbayError, ebay.requests.RequestException) as e:   # eBay down/timeout: fall back, don't crash
+        d.setdefault("errors", []).append(str(e))
+    if market is None and card_key:   # search found nothing: fall back to tracked sold/asks
+        market, stats, basis = prices.market_for(card_key, grader, d["grade"], d["condition"])
     lowest = None
     try:
         lowest = low.result()
@@ -235,6 +241,17 @@ def update_live_price(draft_id, price):
     d = json.loads(db.q("SELECT data_json FROM drafts WHERE id=?", (draft_id,))[0]["data_json"])
     d["price"] = round(price, 2)
     db.run("UPDATE drafts SET data_json=? WHERE id=?", (json.dumps(d), draft_id))
+
+
+def revise(draft_id):
+    """Push a posted draft's current title, description, item specifics and condition to its live listing
+    (post_listing is idempotent by SKU and never re-publishes or re-prices a live offer)."""
+    row = db.q("SELECT * FROM drafts WHERE id=?", (draft_id,))[0]
+    d = json.loads(row["data_json"])
+    d["image_urls"] = d.get("image_urls") or [ebay.upload_image(row["front_path"]), ebay.upload_image(row["back_path"])]
+    ebay.post_listing(f"PP-{draft_id}", d, d["image_urls"])
+    db.run("UPDATE drafts SET data_json=? WHERE id=?", (json.dumps(d), draft_id))
+    return row["listing_id"]
 
 
 def post(draft_id):

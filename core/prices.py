@@ -718,6 +718,44 @@ def solid(stats):
     return bool(stats) and (stats.get("kind") in ("sold", "override") or (stats.get("kind") == "asks" and stats["n"] >= 5))
 
 
+def searched_value(items, b, name_en, number, lang):
+    """Pure. Median total (price + postage) of the search results that are this exact card in bucket `b`
+    (graded/played/other-language/junk/risky-seller listings dropped, then accessories under 40 % of the median
+    and outliers). Returns (median, n) or (None, 0)."""
+    first = re.split(r"[\s&]+", name_en.strip())[0]   # 'Solgaleo&Lunala' -> 'Solgaleo' (titles write 'Solgaleo & Lunala')
+    totals = []
+    for it in items:
+        if not (it.get("price") or {}).get("value") or not it.get("title"):
+            continue
+        t = round(float(it["price"]["value"]) + _ship(it), 2)
+        if ask_bucket(it) == b and title_ok(it["title"], [first], number=number, lang=lang) and not risky_seller(it, t):
+            totals.append(t)
+    if not totals:
+        return None, 0
+    med = statistics.median(totals)
+    kept = iqr_filter([t for t in totals if t >= 0.4 * med] if len(totals) >= 3 else totals)
+    return round(statistics.median(kept), 2), len(kept)
+
+
+def searched_market(name_en, number, lang, grader=None, grade=None, condition="NM"):
+    """Market value from one live eBay UK search for '<name> <number>' (e.g. 'Charizard ex 183/165'): the median
+    fixed-price listing in the same condition. Raw LP/MP/HP = the Raw median × condition multiplier.
+    Returns (value, stats, basis) like market_for, or (None, None, None) when nothing matches. 1 Browse call."""
+    if not (name_en or "").strip() or not (number or "").strip():
+        return None, None, None   # unread card: nothing sensible to search for
+    if grader and not grade:
+        return None, None, None   # graded but grade unknown: no bucket to price from
+    q = re.sub(r"\s*&\s*", " & ", f"{name_en.strip()} {number.strip()}") + (" japanese" if lang == "ja" else "")
+    b = f"{grader.upper()} {grade}" if grader else "Raw"
+    value, n = searched_value(ebay.search_active(q), b, name_en, number, lang)
+    if value is None:
+        return None, None, None
+    mult, learned = (1.0, "") if grader else condition_mult(condition)
+    tag = f" × {mult}{learned}" if mult != 1 else ""
+    return round(value * mult, 2), {"kind": "search", "n": n, "low_confidence": n < 3}, \
+        f"{b}{tag} · eBay search '{q}' median of {n}"
+
+
 def market_for(card_key, grader=None, grade=None, condition="NM", card=None, bucket=None):
     """Returns (value, stats, basis) from eBay data only (`card` is unused; Cardmarket no longer prices anything).
     manual override > sold (>=3 sales, last 90 days, Best Offer excluded when possible) > low quartile of today's

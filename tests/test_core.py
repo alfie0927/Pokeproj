@@ -430,6 +430,15 @@ def test_parse_lines():
     # stage labels and evolution lines are never the name, even when OCR makes them the tallest text
     assert vision.parse_lines([L("STAGEZ", 0.03, 0.08), L("Charizard ex", 0.06, 0.05)])["name"] == "Charizard ex"
     assert vision.parse_lines([L("リザードか5進化", 0.03, 0.08), L("リザードンeX", 0.06, 0.05)])["name"] == "リザードンeX"
+    # raw TAG TEAM / ACE SPEC cards are not slabs; a wrapped two-line name is joined (real OCR output)
+    p = vision.parse_lines([("Moltres&", 0.27, 0.05, 0.034), ("QX300", 0.72, 0.07, 0.066), ("BASIC", 0.1, 0.06, 0.021),
+                            ("Zapdos&Articuno", 0.39, 0.08, 0.038), ("TAG", 0.11, 0.12, 0.026), ("TEAM", 0.27, 0.12, 0.029),
+                            L("TAG TEAM rule", 0.9), L("When your TAG TEAM is", 0.92), L("SM210", 0.93)])
+    assert (p["name"], p["graded"], p["grader"], p["number"], p["set_codes"]) == ("Moltres & Zapdos & Articuno", False, None, None, [])
+    assert vision.parse_lines([L("Prime Catcher", 0.05, 0.06), L("ACE SPEC", 0.1), L("157/162", 0.95)])["graded"] is False
+    p = vision.parse_lines([L("TAG", 0.04), L("9", 0.06), L("POKEMON 2019", 0.08), L("Charizard", 0.4, 0.05)])   # a TAG slab
+    assert (p["graded"], p["grader"], p["grade"]) == (True, "TAG", "9")
+    assert vision.parse_lines([L("PSA", 0.05), L("Charizard", 0.4, 0.05)])["graded"] is False   # stray word, no grade/cert
 
 
 def test_pick_card():
@@ -459,6 +468,11 @@ def test_pick_card():
                mk("swsh10-126", "126", 189, "2022-05-27")]
     assert vision.pick_card(miltank, vision.bottom_reads(lines))[0]["id"] == "swsh12.5gg-GG24"
     assert vision.pick_card(miltank, ["GGPAVGG70★", "1GCPAIGG70★"])[0] is None   # the number bands alone misread it
+    # promos print an id with no total: 'SM210' picks the Black Star promo over the set cards
+    birds = [mk("smp-SM210", "SM210", 248, "2019-08-23"), mk("sm115-44", "44", 68, "2019-08-23"), mk("sm115-66", "66", 68, "2019-08-23")]
+    birds[0]["set"]["id"] = "smp"
+    assert vision.printed_full(birds[0]) == "SM210"   # TCGdex counts the promo set (248) but the card says SM210
+    assert vision.pick_card(birds, ["IUus.HYOGONOSUKE", "SM210", "©2019Pokemon"])[0]["id"] == "smp-SM210"
 
 
 def test_card_quad():
@@ -679,6 +693,30 @@ def test_scan_helpers():
     take = deals.allowance(2)
     assert [take(), take(), take(), take()] == [True, True, False, False]
     assert deals.pace(3000) == (True, 60) and deals.pace(800) == (True, 180) and deals.pace(0) == (False, 180)
+
+
+def test_searched_value():
+    it = lambda title, price, ship=0, cond="4000", fb=500: {
+        "title": title, "price": {"value": str(price)}, "conditionId": cond,
+        "shippingOptions": [{"shippingCost": {"value": str(ship)}}],
+        "seller": {"feedbackScore": fb, "feedbackPercentage": "99.9"}}
+    items = [it("Charizard ex 183/165 151 Ultra Rare NM", 20, 1),
+             it("Charizard ex 183/165 Pokemon 151", 22),
+             it("Charizard ex 183/165 151 Ultra Rare", 24),
+             it("Charizard ex 183/165 PSA 10", 90, cond="2750"),       # graded: other bucket
+             it("Charizard ex 183/165 creased", 8),                    # played
+             it("Charizard ex 183/165 Japanese", 15),                  # other language
+             it("Charizard ex 199/165 SIR", 300),                      # other card number
+             it("Charizard ex 183/165 sticker", 2),                    # accessory
+             it("Charizard ex 183/165 NM", 60, fb=3)]                  # new seller at £50+
+    assert prices.searched_value(items, "Raw", "Charizard ex", "183/165", "en") == (22.0, 3)
+    assert prices.searched_value(items, "PSA 10", "Charizard ex", "183/165", "en") == (90.0, 1)
+    assert prices.searched_value(items, "Raw", "Pikachu", "1/1", "en") == (None, 0)
+    tag = [it("Solgaleo & Lunala GX 254/236 Cosmic Eclipse", 80), {"title": "Solgaleo & Lunala 254/236"}]  # no price
+    assert prices.searched_value(tag, "Raw", "Solgaleo&Lunala", "254/236", "en") == (80.0, 1)
+    assert prices.searched_market("", "183/165", "en") == (None, None, None)
+    assert prices.searched_market("Charizard ex", None, "en") == (None, None, None)
+    assert prices.searched_market("Charizard ex", "183/165", "en", "PSA", None) == (None, None, None)
 
 
 if __name__ == "__main__":

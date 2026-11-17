@@ -221,8 +221,10 @@ def grade_photos(images, client=None):
 NUMBER = re.compile(r"(?<![\d/])([A-Z]{0,3} ?\d{1,3})\s*/\s*(\d{2,3})(?!\d)")   # '201/165SAR' -> 201/165
 SET_CODE = re.compile(r"^(?:[A-Z]{2,4}|(?i:SV|S|SM)\d{1,2}[a-zA-Z]?)$")   # 'MEW', 'SSP', 'SV2a'/'sv2a'; not 'from'
 NOT_CODES = {"HP", "PSA", "BGS", "CGC", "SGC", "TAG", "ACE", "MT", "NM", "GEM", "MINT", "LP", "MP",
-             "GAME", "FREAK", "INC", "LLC", "TM", "LTD", "CO"}   # copyright line words
+             "GAME", "FREAK", "INC", "LLC", "TM", "LTD", "CO", "TEAM", "GAM", "RULE"}   # copyright / rule-box words
 GRADERS = re.compile(r"\b(PSA|BGS|BECKETT|CGC|SGC|TAG|ACE)\b", re.I)
+# A slab label's grader word: not the 'TAG TEAM' banner or 'ACE SPEC' / 'Ace Trainer' printed on raw cards
+SLAB = re.compile(r"\b(PSA|BGS|BECKETT|CGC|SGC|TAG|ACE)\b(?!\s*(?:TEAM|SPEC|TRAINER))", re.I)
 GRADE = re.compile(r"\b(10|9\.5|9|8\.5|8|7\.5|7|6|5|4|3|2|1)\b")
 JA = re.compile(r"[぀-ヿ一-鿿]")
 # Card-type labels and evolution lines that sit near the name ('BASIC', 'STAGE2', 'Evolves from…', 'たね', '…から進化')
@@ -331,17 +333,26 @@ def parse_lines(lines):
                         codes.append(v)
     top = [l for l in lines if l[2] < 0.3 and not GRADERS.search(l[0]) and re.search(r"[A-Za-z぀-ヿ一-鿿]{3,}", l[0])
            and not STAGE.search(l[0])]
-    name = re.sub(r"\bHP\s*\d+\b", "", max(top, key=lambda l: l[3])[0]).strip() if top else ""
-    graded = next((GRADERS.search(t) for t in texts if GRADERS.search(t)), None)
+    name = ""
+    if top:
+        best = max(top, key=lambda l: l[3])
+        # a long name wraps onto two lines ('Moltres&' / 'Zapdos&Articuno'): join the neighbour that continues it
+        parts = [best] + [l for l in top if l is not best and abs(l[2] - best[2]) < 0.05 and abs(l[1] - best[1]) < 0.3
+                          and any(x[0].endswith("&") or x[0].startswith("&") for x in (l, best))]
+        name = " ".join(l[0] for l in sorted(parts, key=lambda l: l[2]))
+        name = re.sub(r"\s*&\s*", " & ", re.sub(r"\bHP\s*\d+\b", "", name)).strip()
+    graded = next((SLAB.search(t) for t in texts if SLAB.search(t)), None)
     grader = grade = cert = None
     if graded:
         grader = {"BECKETT": "BGS"}.get(graded[1].upper(), graded[1].upper())
         for i, t in enumerate(texts):
             u = t.upper()
-            if GRADE.search(u) and (re.search(r"MINT|MT|GEM|PRISTINE|NM|GRADE", u) or (i and GRADERS.search(texts[i - 1]))):
+            if GRADE.search(u) and (re.search(r"MINT|MT|GEM|PRISTINE|NM|GRADE", u) or (i and SLAB.search(texts[i - 1]))):
                 grade = GRADE.search(u)[1]
                 break
         cert = next((m[0] for t in texts for m in [re.search(r"\b\d{7,10}\b", t)] if m), None)
+        if not (grade or cert):   # a grader word with no grade and no cert number is not a slab label
+            graded = grader = None
     # Japanese only if the name is, or several lines are: one stray misread character shouldn't flip it
     ja = bool(JA.search(name)) or sum(bool(JA.search(t)) for t in texts) >= 3
     return {"number": number, "set_codes": codes, "name": name, "graded": bool(graded), "grader": grader,
@@ -365,7 +376,7 @@ def printed_full(c):
     """The number as printed: '199/165', gallery cards 'TG03/TG30', 'GG34/GG70'; promos just the id."""
     local, total = c.get("localId") or "", ((c.get("set") or {}).get("cardCount") or {}).get("official")
     m = re.match(r"^([A-Za-z]*)(\d+)$", local)
-    if not (m and total):
+    if not (m and total) or ((c.get("set") or {}).get("id") or "").endswith("p"):   # promo sets: bare 'SM210'
         return local
     return f"{local}/{m[1]}{total}" if m[1] else f"{local}/{total}"
 
@@ -378,7 +389,7 @@ def number_similarity(read, printed):
     """Pure. 0-1: how well the printed number appears somewhere in the OCR text, ignoring look-alike characters."""
     from difflib import SequenceMatcher
     r, p = _canon(read), _canon(printed)
-    if not p or "/" not in p or not r:
+    if not p or not r or ("/" not in p and len(p) < 5):   # promos have no total ('SM210', 'SWSH039'): whole id
         return 0.0
     n = len(p)
     return max(SequenceMatcher(None, r[i:i + n], p).ratio() for i in range(max(1, len(r) - n + 1)))
@@ -388,7 +399,11 @@ def pick_card(cards, reads):
     """Pure. cards: catalog cards sharing the OCR'd name; reads: OCR strings from the number bands.
     Returns (best or None, candidates best-first). Auto-picks only a clear winner."""
     from .catalog import release
-    score = {c["id"]: max((number_similarity(t, printed_full(c)) for t in reads), default=0.0) for c in cards}
+
+    def forms(c):   # promo ids ('SM210', 'SWSH039') are printed bare even when TCGdex counts the promo set
+        local = c.get("localId") or ""
+        return [printed_full(c)] + ([local] if re.match(r"^[A-Za-z]{1,4}\d{2,}$", local) else [])
+    score = {c["id"]: max((number_similarity(t, p) for t in reads for p in forms(c)), default=0.0) for c in cards}
     score = {k: (v if v >= 0.6 else 0.0) for k, v in score.items()}   # weak partial matches are noise
     ranked = sorted(cards, key=lambda c: (round(score[c["id"]], 2), release(c)), reverse=True)
     if not ranked:
@@ -403,9 +418,10 @@ NAME_SUFFIX = re.compile(r"\s*(ex|EX|V|VMAX|VSTAR|GX)$")
 
 
 def _name_cards(lang, name):
-    """Catalog cards for an OCR'd name: as read, then without an ex/V suffix ('Tinkatonex'), then first word."""
+    """Catalog cards for an OCR'd name: as read, then without an ex/V suffix ('Tinkatonex'), then the first word
+    ('Moltres' for 'Moltres & Zapdos & Articuno')."""
     from . import catalog
-    for q in dict.fromkeys([name, NAME_SUFFIX.sub("", name), name.split(" ")[0]]):
+    for q in dict.fromkeys([name, NAME_SUFFIX.sub("", name), re.split(r"[\s&]+", name)[0]]):
         if len(q) >= 3:
             briefs = catalog.search(lang, q)
             if briefs:
