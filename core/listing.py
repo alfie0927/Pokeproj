@@ -1,4 +1,5 @@
 """Photo pair -> draft listing -> posted eBay listing."""
+import datetime
 import json
 import re
 import string
@@ -8,14 +9,15 @@ from pathlib import Path
 from . import catalog, db, ebay, prices, vision
 
 def target_price(strategy, pct, market, lowest_total, postage):
-    """Returns (item_price, basis, warning). Pure, tested."""
+    """Returns (item_price, basis, warning). Pure, tested. Market is a sold price WITHOUT postage (as pokepulse
+    quotes it), so 5 % under market = market × 0.95. The cheapest listing is a total, so postage comes off it."""
     warn = None
     if strategy == "lowest" and lowest_total is None:
         strategy, warn = "market", "No same-condition listing found; priced from market value"
     base = lowest_total if strategy == "lowest" else market
     if base is None:
         return None, None, "No market data: set the price manually"
-    return max(round(base * (1 - pct / 100) - postage, 2), 0.99), strategy, warn
+    return max(round(base * (1 - pct / 100) - (postage if strategy == "lowest" else 0), 2), 0.99), strategy, warn
 
 
 def priced(strategy, pct, market, lowest_total):
@@ -31,9 +33,12 @@ def priced(strategy, pct, market, lowest_total):
 
 def warnings(price, market, stats, read, matched):
     w = []
-    if market and price and not 0.6 * market <= price + ebay.postage_for(price)[1] <= 1.5 * market:
+    if market and price and not 0.6 * market <= price <= 1.5 * market:
         w.append(f"Price is far from market value (£{market:.2f})")
-    if not stats or stats["n"] < 3:
+    if stats and stats.get("kind") == "blend":
+        if stats["check"]:
+            w.append("Check the price: " + "; ".join(stats["check"]))
+    elif not stats or stats["n"] < 3:
         w.append("Thin data: fewer than 3 comparable sales/listings for this condition — check the price")
     if read.uncertain_fields:
         w.append("Uncertain: " + ", ".join(read.uncertain_fields))
@@ -44,10 +49,13 @@ def warnings(price, market, stats, read, matched):
     return w
 
 
+LANG_NAME = {"ja": "Japanese", "zh": "Chinese"}   # anything else is English
+
+
 def title_for(d):
     cond = f"{d['grader']} {d['grade']}" if d["graded"] else d["condition"] or "NM"
     parts = [d["name"], d["number"], d["set_name"], d.get("rarity") or "",
-             "Japanese" if d["language"] == "ja" else "", cond, "Pokemon Card"]
+             LANG_NAME.get(d["language"], ""), cond, "Pokemon Card"]
     t = re.sub(r"\s+", " ", " ".join(p for p in parts if p)).strip()
     while len(t) > 80 and d.get("rarity") and d["rarity"] in t:  # drop rarity first, then truncate
         t = t.replace(d["rarity"] + " ", "")
@@ -60,7 +68,7 @@ def description_for(d, read):
                              "HP": "Heavily Played"}[d["condition"] or "NM"]
     notes = "".join(f"<li>{n}</li>" for n in read.condition_notes)
     return (f"<p><b>{d['name']}</b> — {d['number']} — {d['set_name']}"
-            f"{' — ' + d['rarity'] if d.get('rarity') else ''} — {'Japanese' if d['language'] == 'ja' else 'English'}</p>"
+            f"{' — ' + d['rarity'] if d.get('rarity') else ''} — {LANG_NAME.get(d['language'], 'English')}</p>"
             f"<p><b>Condition:</b> {cond}</p><p>{read.condition_summary}</p>"
             + (f"<ul>{notes}</ul>" if notes else "") + f"<p>{db.setting('footer')}</p>")
 
@@ -68,7 +76,7 @@ def description_for(d, read):
 def aspects_for(d):
     return {"Game": "Pokémon TCG", "Card Name": d["name"], "Character": d["name"].split(" ")[0],
             "Set": d["set_name"], "Card Number": d["number"], "Rarity": d.get("rarity"),
-            "Language": "Japanese" if d["language"] == "ja" else "English",
+            "Language": LANG_NAME.get(d["language"], "English"),
             "Manufacturer": "The Pokémon Company", "Graded": "Yes" if d["graded"] else "No",
             "Professional Grader": d["grader"] if d["graded"] else None, "Grade": d["grade"] if d["graded"] else None,
             "Certification Number": d.get("cert_number") if d["graded"] else None,
@@ -90,13 +98,19 @@ def needs_reprice(old, new_price, changed_card, changed_cond, reprice_clicked):
 
 def price_draft(d, strategy, pct):
     """(Re)compute market, lowest listing and price for a draft dict in place.
-    Market = median of a live eBay UK search for '<name> <number>' (prices.searched_market); tracked sold/asks
-    (prices.market_for) only when that search finds nothing."""
+    Market = median eBay sold price without postage, as pokepulse quotes it (prices.sold_item_market, 3+ tracked
+    sales); else an estimate from a live eBay UK search for '<name> <number>' (prices.searched_market); else from
+    stored listings (prices.item_market)."""
+    if d.get("own_market"):   # your own figure (e.g. copied from pokepulse): the strategy applies to it, no search
+        price, used, warn = priced(strategy, pct, d["own_market"], (d.get("lowest") or {}).get("total"))
+        d.update(market=d["own_market"], market_basis="your figure", comps_n=None,
+                 price=price, strategy=used, strategy_warning=warn)
+        return None
     card_key, lang = d.get("card_key"), d["language"]
     market, stats, basis = (None, None, None)
     first = d["name"].split(" ")[0]
     pool = ThreadPoolExecutor(1)   # the cheapest-listing lookup runs alongside the market lookup below
-    low = pool.submit(ebay.lowest_listing, f"{d['name']} {d['number'].split('/')[0]}" + (" japanese" if lang == "ja" else ""),
+    low = pool.submit(ebay.lowest_listing, f"{d['name']} {d['number'].split('/')[0]}" + prices.lang_word(lang),
                       lambda t: prices.title_ok(t, [first], number=d["number"], lang=lang),
                       d["grader"] if d["graded"] else None, d["grade"], d["condition"] or "NM")
     pool.shutdown(wait=False)
@@ -112,12 +126,14 @@ def price_draft(d, strategy, pct):
             d.setdefault("errors", []).append(str(e))
         prices.follow(card_key, 3, "draft", d["name"], d["number"])
     grader = d["grader"] if d["graded"] else None
-    try:   # market = live eBay search for 'name number' (e.g. 'Charizard ex 183/165')
-        market, stats, basis = prices.searched_market(d["name"], d["number"], lang, grader, d["grade"], d["condition"])
-    except (ebay.EbayError, ebay.requests.RequestException) as e:   # eBay down/timeout: fall back, don't crash
-        d.setdefault("errors", []).append(str(e))
-    if market is None and card_key:   # search found nothing: fall back to tracked sold/asks
-        market, stats, basis = prices.market_for(card_key, grader, d["grade"], d["condition"])
+    if card_key:   # eBay solds (weighted more) blended with today's listings, item price without postage
+        market, stats, basis = prices.blended_market(card_key, grader, d["grade"], d["condition"])
+    if market is None:
+        try:   # nothing stored (card not in the catalogue, or no data yet): live eBay search for 'name number'
+            market, stats, basis = prices.searched_market(d["name"], d["number"], lang, grader, d["grade"], d["condition"])
+        except (ebay.EbayError, ebay.requests.RequestException) as e:   # eBay down/timeout: fall back, don't crash
+            d.setdefault("errors", []).append(str(e))
+    d["price_check"] = (stats or {}).get("check") or ([] if market else ["no eBay data: set the price"])
     lowest = None
     try:
         lowest = low.result()
@@ -133,7 +149,7 @@ def build_draft(front, back, strategy, pct, card=None):
     """card=(lang, card_id) when the user already chose the card (e.g. 'List this card' on the Prices page):
     photos are still read for slab/grade, but the catalog card is the one given."""
     read = vision.read_card(front, back)
-    lang = "ja" if read.language == "ja" else "en"
+    lang = read.language if read.language in ("ja", "zh") else "en"
     if card:
         lang = card[0]
         cands = [c for c in [catalog.card(*card)] if c]
@@ -144,7 +160,9 @@ def build_draft(front, back, strategy, pct, card=None):
         cands = [c for c in (catalog.card(lang, i) for i in read.candidate_ids) if c]
     else:
         cands = catalog.find(lang, read.name_en, read.number, read.set_code)
-    c = cands[0] if cands else None
+    # several matches: nothing is chosen (or priced) until you pick one; pricing the first guess gave a Mew GG10
+    # (worth ~£48) the £475 market of a Pokémon Rumble Mew
+    c = cands[0] if len(cands) == 1 else None
     d = {"read": read.model_dump(), "candidates": [x["id"] for x in cands], "language": lang,
          "card_key": f"{lang}:{c['id']}" if c else None, "card_id": c and c["id"],
          "image_ref": catalog.image(c) if c else None,
@@ -228,6 +246,19 @@ def sync_live_prices():
     return changed
 
 
+def stale_check(price, market, days, stale_days, pct=5.0):
+    """Pure. (reason, suggested price) for a live listing that needs a price change, or (None, None).
+    Over 10 % above market -> the market strategy price; unsold for stale_days -> also at least 5 % lower."""
+    if market and price > market * 1.10:
+        reason = "above market"
+    elif days >= stale_days:
+        reason = f"unsold {days} d"
+    else:
+        return None, None
+    options = [price * 0.95] + ([market * (1 - pct / 100)] if market else [])
+    return reason, max(round(min(options), 2), 0.99)
+
+
 def _safe(fn, *a):
     try:
         return fn(*a)
@@ -267,5 +298,6 @@ def post(draft_id):
     except Exception as e:
         db.run("UPDATE drafts SET status='failed', error=?, data_json=? WHERE id=?", (str(e)[:2000], json.dumps(d), draft_id))
         raise
+    d["posted_at"] = datetime.date.today().isoformat()   # stale-listing age (older posts fall back to created_at)
     db.run("UPDATE drafts SET status='posted', listing_id=?, data_json=? WHERE id=?", (listing_id, json.dumps(d), draft_id))
     return listing_id

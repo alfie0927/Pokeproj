@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 48" role="img" aria-label="PokéProj">
+  <g transform="translate(24 24)">
+    <circle r="20" fill="#F3F6FF" stroke="#0A1540" stroke-width="3"/>
+    <path d="M-20 0a20 20 0 0 1 40 0z" fill="#E3350D" stroke="#0A1540" stroke-width="3"/>
+    <rect x="-20" y="-2" width="40" height="4" fill="#0A1540"/>
+    <circle r="7" fill="#F3F6FF" stroke="#0A1540" stroke-width="3"/>
+  </g>
+  <text x="54" y="32" font-family="'Arial Rounded MT Bold','Trebuchet MS',Verdana,sans-serif" font-size="24" font-weight="700" fill="#FFCB05">PokéProj</text>
+</svg>

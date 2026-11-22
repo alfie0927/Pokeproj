@@ -1,0 +1,97 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  :root { --bg: transparent; --ink: #1f2328; --muted: #6b7280; --line: #d0d7de; --accent: #e5533d; --card: #ffffff; }
+  @media (prefers-color-scheme: dark) { :root { --ink: #e6edf3; --muted: #9aa4af; --line: #30363d; --card: #161b22; } }
+  body { margin: 0; font: 13px system-ui, -apple-system, "Segoe UI", sans-serif; color: var(--ink); background: var(--bg); }
+  .grid { display: flex; flex-wrap: wrap; gap: 10px; padding: 2px; }
+  .pair { border: 1px solid var(--line); border-radius: 10px; padding: 6px 6px 4px; background: var(--card); }
+  .head { display: flex; justify-content: space-between; align-items: center; margin: 0 2px 4px; color: var(--muted); }
+  .head b { color: var(--ink); font-weight: 600; }
+  .swap { border: 1px solid var(--line); background: none; color: var(--ink); border-radius: 6px; cursor: pointer;
+          font-size: 12px; padding: 1px 7px; }
+  .swap:hover, .swap:focus-visible { border-color: var(--accent); outline: none; }
+  .row { display: flex; gap: 6px; }
+  figure { margin: 0; text-align: center; }
+  img { display: block; height: 128px; width: 96px; object-fit: cover; border-radius: 6px; cursor: grab;
+        border: 2px solid transparent; touch-action: none; user-select: none; }
+  img.drag { opacity: .35; }
+  img.over { border-color: var(--accent); }
+  figcaption { font-size: 11px; color: var(--muted); margin-top: 2px; }
+</style>
+</head>
+<body>
+<div class="grid" id="grid" role="list"></div>
+<script>
+// Minimal Streamlit component protocol (no build step): ready -> render(args) -> setComponentValue(order).
+const send = (type, data) => window.parent.postMessage(Object.assign({ isStreamlitMessage: true, type }, data), "*");
+let items = [], order = [], dragId = null;
+
+function emit() { send("streamlit:setComponentValue", { value: order.slice(), dataType: "json" }); }
+function height() { send("streamlit:setFrameHeight", { height: document.body.scrollHeight + 4 }); }
+function swap(a, b) {
+  const i = order.indexOf(a), j = order.indexOf(b);
+  if (i < 0 || j < 0 || i === j) return;
+  [order[i], order[j]] = [order[j], order[i]];
+  draw(); emit();
+}
+
+function draw() {
+  const byId = Object.fromEntries(items.map(it => [it.id, it]));
+  const grid = document.getElementById("grid");
+  grid.innerHTML = "";
+  for (let p = 0; p < order.length; p += 2) {
+    const box = document.createElement("div");
+    box.className = "pair"; box.setAttribute("role", "listitem");
+    const head = document.createElement("div");
+    head.className = "head";
+    head.innerHTML = `<b>Card ${p / 2 + 1}</b>`;
+    const btn = document.createElement("button");
+    btn.className = "swap"; btn.textContent = "⇄"; btn.title = "Swap front and back";
+    btn.setAttribute("aria-label", `Swap front and back of card ${p / 2 + 1}`);
+    btn.onclick = () => swap(order[p], order[p + 1]);
+    head.appendChild(btn);
+    const row = document.createElement("div");
+    row.className = "row";
+    [order[p], order[p + 1]].forEach((id, k) => {
+      if (id === undefined) return;
+      const fig = document.createElement("figure");
+      const img = document.createElement("img");
+      img.src = byId[id].src; img.alt = `${k ? "Back" : "Front"} of card ${p / 2 + 1}: ${byId[id].label}`;
+      img.title = byId[id].label + " — drag onto another photo to swap";
+      img.draggable = true; img.dataset.id = id;
+      img.addEventListener("dragstart", e => { dragId = id; img.classList.add("drag"); e.dataTransfer.effectAllowed = "move"; });
+      img.addEventListener("dragend", () => { img.classList.remove("drag"); dragId = null; });
+      img.addEventListener("dragover", e => { e.preventDefault(); img.classList.add("over"); });
+      img.addEventListener("dragleave", () => img.classList.remove("over"));
+      img.addEventListener("drop", e => { e.preventDefault(); img.classList.remove("over"); if (dragId !== null) swap(dragId, id); });
+      const cap = document.createElement("figcaption");
+      cap.textContent = k ? "back" : "front";
+      fig.append(img, cap); row.appendChild(fig);
+    });
+    box.append(head, row); grid.appendChild(box);
+  }
+  setTimeout(height, 0);
+}
+
+window.addEventListener("message", e => {
+  if (!e.data || e.data.type !== "streamlit:render") return;
+  const args = e.data.args || {};
+  const th = e.data.theme;   // follow the app's theme (light or dark), not the computer's
+  if (th) {
+    const r = document.documentElement.style;
+    r.setProperty("--ink", th.textColor); r.setProperty("--card", th.secondaryBackgroundColor);
+    r.setProperty("--accent", th.primaryColor);
+    r.setProperty("--muted", `color-mix(in srgb, ${th.textColor} 60%, transparent)`);
+    r.setProperty("--line", `color-mix(in srgb, ${th.textColor} 18%, transparent)`);
+  }
+  items = args.items || [];
+  order = items.map(it => it.id);   // the order sent from Python is the truth on every render
+  draw();
+});
+send("streamlit:componentReady", { apiVersion: 1 });
+</script>
+</body>
+</html>

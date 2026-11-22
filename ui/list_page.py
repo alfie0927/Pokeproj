@@ -1,6 +1,8 @@
 """List cards: upload photos -> review grid (condition, price, accept in one place) -> post, then live listings."""
+import datetime
 import json
 import os
+import re
 import string
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -8,8 +10,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import pandas as pd
 import streamlit as st
 
-from core import catalog, db, ebay, inventory, listing, prices, vision
-from ui.common import (STATUS_KIND, cached_pairs, chip, data_uri, env_pills, esc, header, limits, money, photo,
+from core import catalog, db, ebay, inventory, listing, prices, sheet, vision
+from ui.common import (STATUS_KIND, cached_pairs, chip, data_uri, env_pills, esc, header, limits, money, photo, photo_order,
                        section, tiles, upload_thumb)
 
 UPLOADS = db.DATA / "uploads"
@@ -62,15 +64,24 @@ def upload_panel():
             return
         if not files:
             return
-        idx = cached_pairs(tuple(x.file_id for x in files), [(x.name, x.getvalue()) for x in files])
-        pairs = [(files[f], files[b]) for f, b in idx]
-        cols = st.columns(min(len(pairs), 6) * 2)
-        for i, (f, b) in enumerate(pairs[:6]):
-            cols[2 * i].image(upload_thumb(f.file_id, f.getvalue()), caption=f"#{i + 1} front")
-            cols[2 * i + 1].image(upload_thumb(b.file_id, b.getvalue()), caption="back")
-        if len(pairs) > 6:
-            st.caption(f"…and {len(pairs) - 6} more card(s)")
+        ids = tuple(x.file_id for x in files)
+        idx, how = cached_pairs(ids, [(x.name, x.getvalue()) for x in files])
+        auto = [i for pair in idx for i in pair]
+        if len(auto) != len(files):   # fronts and backs didn't come out even: the rest go last, for you to place
+            st.warning("Couldn't find a back for every front. Arrange the photos below: each card is front, then back.")
+            auto += [i for i in range(len(files)) if i not in auto]
+        orders = st.session_state.setdefault("photo_orders", {})
+        order = orders.get(ids) or auto
+        moved = photo_order([{"id": i, "src": data_uri(upload_thumb(files[i].file_id, files[i].getvalue(), 240)),
+                              "label": files[i].name} for i in order], key=f"po{st.session_state.up_n}_{hash(ids)}")
+        if moved and sorted(moved) == sorted(order) and moved != order:
+            orders[ids] = order = moved
+        pairs = [(files[order[j]], files[order[j + 1]]) for j in range(0, len(order) - 1, 2)]
+        manual = ids in orders
+        st.caption(("Your order (dragged). " if manual else f"Order from {how}. ")
+                   + "Drag a photo onto another to swap them, or press ⇄ to swap a card's front and back.")
         if st.button(f"Identify & price {len(pairs)} card(s)", type="primary"):
+            orders.pop(ids, None)
             db.set_setting("strategy", strategy)
             process(pairs, strategy, pct, (pre["lang"], pre["id"]) if pre else None)
 
@@ -111,6 +122,15 @@ def process(pairs, strategy, pct, card=None):
 
 
 # ---------------------------------------------------------------- 2. review grid
+@st.cache_data(ttl=86400, show_spinner=False)
+def card_label(lang, card_id):
+    """'Crown Zenith Galarian Gallery · GG10/GG70 · 2023' for the card picker (TCGdex calls are cached)."""
+    c = catalog.card(lang, card_id) or {}
+    s = c.get("set") or {}
+    return " · ".join(x for x in (s.get("name"), vision.printed_full(c) if c else card_id,
+                                  (s.get("releaseDate") or "")[:4]) if x)
+
+
 def _rows(filter_status, text):
     rows = db.q("SELECT * FROM drafts WHERE status IN ('draft','accepted','failed','posting') ORDER BY id")
     out = []
@@ -229,19 +249,25 @@ def draft_details(r, d):
         b.image(photo(r["back_path"]) or r["back_path"], caption="back")
         if d.get("image_ref"):
             c.image(d["image_ref"], caption="catalog match")
-        if d.get("lowest"):
-            info.markdown(f"[Cheapest same-condition listing]({d['lowest']['url']}) · {money(d['lowest']['total'])}")
+        slug = re.sub(r"[^a-z0-9]+", "-", f"{d['name']} {d['number']}".lower()).strip("-")   # charizard-ex-183-165
+        info.markdown(f"[Open on pokepulse](https://pokepulse.io/cards/{slug})" + (
+            f" · [Cheapest same-condition listing]({d['lowest']['url']}) · {money(d['lowest']['total'])}" if d.get("lowest") else ""))
         with info.form(f"f{did}"):
             f1, f2, f3 = st.columns(3)
             cands = d.get("candidates") or []
-            card_id = f1.selectbox("Catalog card", cands, index=cands.index(d["card_id"]) if d.get("card_id") in cands else 0) \
+            opts = [None] + cands
+            card_id = f1.selectbox("Catalog card", opts, index=opts.index(d.get("card_id")) if d.get("card_id") in cands else 0,
+                                   format_func=lambda i: "— pick the card —" if i is None else card_label(d["language"], i)) \
                 if len(cands) > 1 else d.get("card_id")
             graded = f1.checkbox("Graded slab", d["graded"])
             grader = f2.selectbox("Grader", list(ebay.GRADER_IDS), index=list(ebay.GRADER_IDS).index(d["grader"]) if d["grader"] in ebay.GRADER_IDS else 0)
             grade = f2.selectbox("Grade", list(ebay.GRADE_IDS), index=list(ebay.GRADE_IDS).index(str(d["grade"])) if str(d["grade"]) in ebay.GRADE_IDS else 0)
             cert = f3.text_input("Cert number", d.get("cert_number") or "")
             cond = f3.selectbox("Raw condition", CONDITIONS, index=CONDITIONS.index(d["condition"] or "NM"))
-            price = st.number_input(f"Price £ (item; buyer also pays £{ebay.postage_for(d.get('price'))[1]:.2f} postage)",
+            p1, p2 = st.columns(2)
+            own = p1.number_input("Market £ (your own figure, e.g. from pokepulse; 0 = eBay solds)",
+                                  0.0, 100000.0, float(d.get("own_market") or 0.0), 0.5)
+            price = p2.number_input(f"Price £ (item; buyer also pays £{ebay.postage_for(d.get('price'))[1]:.2f} postage)",
                                     0.0, 100000.0, float(d.get("price") or 0.0), 0.5)
             title = st.text_input("Title", d["title"], max_chars=80)
             desc = st.text_area("Description (HTML)", d["description"], height=130)
@@ -257,6 +283,8 @@ def draft_details(r, d):
             changed_cond = listing.cond_key(graded, grader, grade, cond) != \
                 listing.cond_key(d["graded"], d["grader"], d["grade"], d["condition"])
             old_price = d.get("price")
+            changed_own = abs(own - float(d.get("own_market") or 0)) > 0.004
+            d["own_market"] = own or None
             d.update(graded=graded, grader=grader if graded else None, grade=grade if graded else None,
                      cert_number=cert if graded else None, condition=None if graded else cond,
                      price=price, title=title, description=desc)
@@ -265,7 +293,7 @@ def draft_details(r, d):
                 d.update(card_id=card_id, card_key=f"{d['language']}:{card_id}", image_ref=catalog.image(cc),
                          number=catalog.printed_number(cc), rarity=string.capwords(cc.get("rarity") or ""),
                          set_name=cc["set"]["name"] if d["language"] == "en" else d["set_name"])
-            if listing.needs_reprice(old_price, price, changed_card, changed_cond, reprice):
+            if listing.needs_reprice(old_price, price, changed_card, changed_cond or changed_own, reprice):
                 listing.price_draft(d, d.get("strategy") or db.setting("strategy"), db.setting("pct_below"))
             d["aspects"] = listing.aspects_for(d)
             listing.save(did, d, "accepted" if accept else "draft")
@@ -291,6 +319,8 @@ def post_bar():
     if go:
         post_all(accepted)
         limits(fresh=True)
+        with st.spinner("Updating your spreadsheet…"):
+            sheet.sync_quiet()
         st.rerun()
     show_post_results()
 
@@ -338,8 +368,8 @@ def live_market(d):
     if not d.get("card_key"):
         return None
     try:
-        return prices.market_for(d["card_key"], d.get("grader") if d.get("graded") else None, d.get("grade"),
-                                 d.get("condition") or "NM")[0]
+        return prices.item_market(d["card_key"], d.get("grader") if d.get("graded") else None, d.get("grade"),
+                                  d.get("condition") or "NM")[0]
     except Exception:
         return None
 
@@ -368,24 +398,37 @@ def live_listings():
         h2.caption("Picked up from eBay: " + ", ".join(f"#{i} £{o:.2f}→£{n:.2f}" for i, o, n in synced))
     else:
         h2.caption("Prices are the ones actually on eBay, including changes made in Seller Hub.")
-    pct = float(db.setting("pct_below"))
-    rows = []
+    pct, stale_days = float(db.setting("pct_below")), int(db.setting("stale_days"))
+    fill = st.session_state.pop("live_fill", False)
+    rows, current, today = [], {}, datetime.date.today()
     for p in posted:
         d = json.loads(p["data_json"])
         mkt = live_market(d)
         price = float(d.get("price") or 0)
         postage = ebay.postage_for(price)[1]   # ponytail: assumes the policy matching today's price, not the one posted with
         sugg = listing.priced("market", pct, mkt, None)[0] if mkt else None
+        listed = (d.get("posted_at") or p["created_at"] or "")[:10]
+        days = (today - datetime.date.fromisoformat(listed)).days if listed else 0
+        need, new = listing.stale_check(price, mkt, days, stale_days, pct)
+        current[p["id"]] = price
         rows.append({"Photo": data_uri(photo(p["front_path"], 160)), "#": p["id"], "Title": d.get("title"),
-                     "Price £": price, "+ postage": postage, "Market now": mkt,
-                     "vs market": ((price + postage) / mkt - 1) if mkt else None, "Suggested £": sugg,
-                     "Added": (p["created_at"] or "")[:10], "Listing": ebay.listing_url(p["listing_id"])})
+                     "Price £": new if fill and new else price, "+ postage": postage, "Market now": mkt,
+                     "vs market": (price / mkt - 1) if mkt else None, "Suggested £": new or sugg,
+                     "Needs": f"⚠ {need}" if need else "", "Added": listed, "Listing": ebay.listing_url(p["listing_id"])})
     df = pd.DataFrame(rows)
-    st.caption(f"**Market now** = today's eBay value for the card in its condition · **Suggested** = {pct:g} % below "
-               "market (your default). Edit **Price £** and press Push to change it on eBay.")
+    flagged = sum(bool(r["Needs"]) for r in rows)
+    st.caption(f"**Market now** = median eBay sold price without postage (as pokepulse shows it) for the card in its "
+               f"condition · **Suggested** = {pct:g} % below market (your default); for a flagged listing (more than "
+               f"10 % above market, or unsold after {stale_days} days) it is also at least 5 % below today's price. "
+               "Edit **Price £** and press Push to change it on eBay.")
+    if flagged and st.button(f"Fill in suggested prices for the {flagged} flagged listing(s)",
+                             help="Only fills the table. Nothing changes on eBay until you press Push."):
+        st.session_state.live_fill = True
+        st.session_state.pop("live_editor", None)
+        st.rerun()
     edited = st.data_editor(df, hide_index=True, key="live_editor", width="stretch", row_height=64,
                             disabled=["Photo", "#", "Title", "+ postage", "Market now", "vs market", "Suggested £",
-                                      "Added", "Listing"],
+                                      "Needs", "Added", "Listing"],
                             column_config={"Photo": st.column_config.ImageColumn(width="small"),
                                            "Listing": st.column_config.LinkColumn(display_text="Open ↗"),
                                            "Price £": st.column_config.NumberColumn(min_value=0.99, step=0.5, format="£%.2f"),
@@ -394,8 +437,8 @@ def live_listings():
                                            "Suggested £": st.column_config.NumberColumn(format="£%.2f"),
                                            "vs market": st.column_config.NumberColumn(format="percent",
                                                                                       help="Your total vs market; + = above")})
-    changes = [(int(a["#"]), float(b["Price £"])) for (_, a), (_, b) in zip(df.iterrows(), edited.iterrows())
-               if abs(float(a["Price £"]) - float(b["Price £"])) > 0.004]
+    changes = [(int(b["#"]), float(b["Price £"])) for _, b in edited.iterrows()
+               if abs(current[int(b["#"])] - float(b["Price £"])) > 0.004]
     if st.button(f"Push {len(changes)} price change(s) to eBay", type="primary", disabled=not changes):
         for did, price in changes:
             try:
@@ -405,4 +448,6 @@ def live_listings():
                 st.error(f"#{did}: {e}")
         _sync_live.clear()
         st.session_state.pop("live_editor", None)
+        with st.spinner("Updating your spreadsheet…"):
+            sheet.sync_quiet()
         st.rerun()

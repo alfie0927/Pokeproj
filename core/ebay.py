@@ -356,6 +356,23 @@ def condition_payload(d):
     return "USED_VERY_GOOD", [{"name": "40001", "values": [RAW_IDS[d["condition"] or "NM"]]}]
 
 
+def best_offer_terms(price, enabled=None, accept_pct=None, decline_pct=None):
+    """Inventory API bestOfferTerms for a listing at `price` (Settings by default), or None when Best Offer is off.
+    eBay answers offers itself: >= accept_pct % of the price accepted, under decline_pct % declined."""
+    enabled = db.setting("best_offer") if enabled is None else enabled
+    if not enabled:
+        return None
+    acc = float(db.setting("bo_accept_pct") if accept_pct is None else accept_pct)
+    dec = float(db.setting("bo_decline_pct") if decline_pct is None else decline_pct)
+    gbp = lambda pct: {"value": f"{price * pct / 100:.2f}", "currency": "GBP"}
+    terms = {"bestOfferEnabled": True}
+    if 0 < acc < 100:   # eBay rejects an auto-accept price at or above the listing price
+        terms["autoAcceptPrice"] = gbp(acc)
+    if 0 < dec < min(acc, 100):
+        terms["autoDeclinePrice"] = gbp(dec)
+    return terms
+
+
 def post_listing(sku, d, image_urls):
     """Idempotent by SKU: re-running updates the item/offer instead of duplicating. Returns listingId."""
     condition, descriptors = condition_payload(d)
@@ -372,6 +389,8 @@ def post_listing(sku, d, image_urls):
                                  "paymentPolicyId": db.setting("payment_policy"),
                                  "returnPolicyId": db.setting("return_policy")},
              "pricingSummary": {"price": {"value": f"{d['price']:.2f}", "currency": "GBP"}}}
+    if terms := best_offer_terms(d["price"]):
+        offer["listingPolicies"]["bestOfferTerms"] = terms
     existing = []
     try:
         existing = call("GET", "/sell/inventory/v1/offer", params={"sku": sku, "marketplace_id": MARKET}).json().get("offers", [])
@@ -426,11 +445,29 @@ def selling_limits():
             "active": int(xml_first(t, "TotalNumberOfEntries") or 0)}
 
 
+def rescale_offer_terms(terms, old_price, new_price):
+    """Pure. bestOfferTerms with auto-accept/decline £ moved to the same % of new_price."""
+    out = dict(terms)
+    for k in ("autoAcceptPrice", "autoDeclinePrice"):
+        if terms.get(k) and old_price > 0:
+            out[k] = {"value": f"{float(terms[k]['value']) / old_price * new_price:.2f}", "currency": "GBP"}
+    return out
+
+
 def set_price(sku, price):
     """Change a live listing's price. Updates the listing and the Inventory API offer together."""
     offers = call("GET", "/sell/inventory/v1/offer", params={"sku": sku, "marketplace_id": MARKET}).json().get("offers", [])
     if not offers:
         raise EbayError(f"No eBay offer found for {sku}")
+    o = offers[0]
+    bo = (o.get("listingPolicies") or {}).get("bestOfferTerms") or {}
+    if bo.get("bestOfferEnabled"):
+        # auto-accept/decline are £ figures: move them with the price (same % of it), in one offer update
+        o["listingPolicies"]["bestOfferTerms"] = rescale_offer_terms(bo, float(o["pricingSummary"]["price"]["value"]), price)
+        o["pricingSummary"]["price"] = {"value": f"{price:.2f}", "currency": "GBP"}
+        call("PUT", f"/sell/inventory/v1/offer/{o['offerId']}",
+             json={k: v for k, v in o.items() if k not in ("offerId", "status", "listing", "statusReason")})
+        return
     r = call("POST", "/sell/inventory/v1/bulk_update_price_quantity", json={"requests": [{
         "sku": sku, "offers": [{"offerId": offers[0]["offerId"],
                                 "price": {"value": f"{price:.2f}", "currency": "GBP"}}]}]}).json()

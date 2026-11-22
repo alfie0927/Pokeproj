@@ -24,17 +24,47 @@ def _get(path):
 
 
 def release(c):
-    return ((c or {}).get("set") or {}).get("releaseDate") or ""
+    """'YYYY-MM-DD' of the card's set. A full card's set brief has no date, so it comes from the (cached) set:
+    without this every candidate looked undated and the copyright-year check never ran."""
+    s = (c or {}).get("set") or {}
+    if s.get("releaseDate") or not s.get("id"):
+        return s.get("releaseDate") or ""
+    sid = s["id"]
+    for lang in (("en", "ja") if sid == sid.lower() else ("ja", "en")):   # Japanese set ids are upper case
+        full = set_(lang, sid)
+        if full and full.get("releaseDate"):
+            return full["releaseDate"]
+    return ""
+
+
+_digital = None
+
+
+def digital_sets():
+    """Set ids of Pokémon TCG Pocket (digital only, never a physical card): 'A1', 'A1a', 'P-A', 'B2a', ..."""
+    global _digital
+    if _digital is None:
+        try:
+            _digital = frozenset(s["id"] for s in (_get("/en/series/tcgp") or {}).get("sets", []))
+        except Exception:
+            return frozenset()   # retry next time
+    return _digital
+
+
+def physical(briefs):
+    """Pure-ish. Drop TCG Pocket cards: they crowded real cards out of the candidates (Liepard, Raikou, Kirlia...)."""
+    dig = digital_sets()
+    return [b for b in briefs if b["id"].rsplit("-", 1)[0] not in dig]
 
 
 def search(lang, name="", number=""):
-    """Brief cards: [{id, localId, name, image}]"""
+    """Brief cards: [{id, localId, name, image}] (physical cards only)"""
     params = []
     if name:
         params.append("name=" + quote(name))
     if number:
         params.append("localId=" + quote(number))  # eq: returns nothing on localId; filter exactly below
-    out = _get(f"/{lang}/cards?" + "&".join(params)) or []
+    out = physical(_get(f"/{lang}/cards?" + "&".join(params)) or [])
     return [c for c in out if c["localId"].lower() == number.lower()] if number else out
 
 
@@ -126,6 +156,23 @@ def english_name(lang, c):
     return f"{mega}{base} {suffix}".strip()
 
 
+def english_from_chinese(name):
+    """'喵喵' -> 'Meowth' via TCGdex's Chinese cards (Traditional, then Simplified) and their Pokédex number.
+    ponytail: names written differently in Simplified and Traditional (喷火龙 / 噴火龍) aren't found; add an
+    s->t character map if Chinese cards become common."""
+    if not name:
+        return None
+    for lang in ("zh-tw", "zh-cn"):
+        briefs = search(lang, name)
+        exact = [b for b in briefs if b["name"] == name] or briefs   # '喵喵' before '伽勒爾 喵喵' (Galarian)
+        for b in exact[:3]:
+            c = card(lang, b["id"])
+            en = c and english_name(lang, c)
+            if en:
+                return en
+    return None
+
+
 def search_dex(dex):
     return _get(f"/en/cards?dexId=eq:{dex}") or []
 
@@ -151,17 +198,25 @@ def find(lang, name_en, number, set_code=None):
         if c:
             return [c]
         briefs = search("ja", "", local.zfill(3) if local.isdigit() else local)   # no/unreadable set code
-        return [c for c in _cards("ja", briefs)
+        if total.isdigit():   # set size from the cached sets list first: '092' alone is in hundreds of sets
+            idx = sets_index("ja")
+            briefs = [b for b in briefs if (idx.get(b["id"].rsplit("-", 1)[0]) or {}).get("cardCount", {})
+                      .get("official") in (None, int(total))]
+        return [c for c in _cards("ja", briefs, limit=80)
                 if not total.isdigit() or (c.get("set") or {}).get("cardCount", {}).get("official") == int(total)]
-    tries = [local.zfill(3), local.lstrip("0") or "0"] if local.isdigit() else [local]
-    briefs = next((b for t in tries for b in [search("en", name_en, t)] if b), []) \
-        or next((b for t in tries for b in [search("en", "", t)] if b), [])
+    tries = list(dict.fromkeys([local.zfill(3), local.lstrip("0") or "0"])) if local.isdigit() else [local]
+    fits = lambda c: not total.isdigit() or (c.get("set") or {}).get("cardCount", {}).get("official") == int(total)
     out = []
-    for c in _cards(lang, briefs):
-        s = c.get("set") or {}
-        if total.isdigit() and s.get("cardCount", {}).get("official") != int(total):
-            continue
-        out.append(c)
+    # every number form ('079' and '79': sets write it differently), with the name first; stopping at the first
+    # form that returned anything lost Champion's Path 79/73 to other sets' card 079 that the total then removed
+    idx = sets_index(lang) if total.isdigit() else {}
+    # set size from the cached sets list, before fetching any card: a bare '5' is in 170+ sets
+    size_ok = lambda b: (idx.get(b["id"].rsplit("-", 1)[0]) or {}).get("cardCount", {}).get("official") in (None, int(total))
+    for nm in dict.fromkeys([name_en, ""]):
+        briefs = [b for b in {b["id"]: b for t in tries for b in search("en", nm, t)}.values() if not idx or size_ok(b)]
+        out = [c for c in _cards(lang, briefs, limit=80) if fits(c)]
+        if out:
+            break
     if set_code and len(out) > 1:
         coded = [c for c in out if (set_(lang, c["set"]["id"]).get("abbreviation") or {}).get("official", "").upper() == set_code.upper()]
         out = coded or out

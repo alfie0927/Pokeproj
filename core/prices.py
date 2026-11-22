@@ -120,13 +120,16 @@ def summarize(sales, today=None):
             "incl_best_offer": incl_bo, "stale": stale, "kind": "sold"}
 
 
-def values(card_key):
-    """{bucket: stats} for a card, from stored sales (all sources; stats['sources'] says which)."""
+def values(card_key, postage=True):
+    """{bucket: stats} for a card, from stored sales (all sources; stats['sources'] says which).
+    postage=False: item prices only (how pokepulse quotes a market price)."""
     by, src = {}, {}
     lang = card_key.split(":", 1)[0]
-    for r in db.q("SELECT bucket, price+shipping AS total, sold_at, source, COALESCE(best_offer, 0) bo, title FROM sales "
+    num = card_number(card_key)
+    total = "price+shipping" if postage else "price"
+    for r in db.q(f"SELECT bucket, {total} AS total, sold_at, source, COALESCE(best_offer, 0) bo, title FROM sales "
                   "WHERE card_key=?", (card_key,)):
-        if r["source"] != "own" and not card_key.startswith("sealed:") and junk_title(r["title"], lang):
+        if r["source"] != "own" and not card_key.startswith("sealed:") and junk_title(r["title"], lang, num):
             continue
         by.setdefault(r["bucket"], []).append((r["total"], r["sold_at"], r["bo"]))
         src.setdefault(r["bucket"], set()).add(r["source"] or "soldcomps")
@@ -156,7 +159,7 @@ SEALED_JUNK = ("fake", "replica", "empty", "opened", "lot", "proxy", "custom", "
                "dice", "coin", "poster", "art card", "code card", "damage counters", "binder", "playmat", "wrapper",
                "display stand", "box only", "x2", "x3", "x4", "x5", "bundle of", "joblot", "job lot", "resealed",
                "pack only", "packs only", "loose packs", "mystery")
-OTHER_LANG = ("japanese", "jpn", "korean", "chinese", "spanish", "español", "espanol", "portuguese", "português",
+OTHER_LANG = ("japanese", "jpn", "jap", "jp", "japan", "korean", "chinese", "spanish", "español", "espanol", "portuguese", "português",
               "portugues", "french", "français", "francais", "german", "deutsch", "italian", "italiano", "thai",
               "indonesian", "dutch", "polish")
 
@@ -184,6 +187,32 @@ def _required(t, w):
     return w in t
 
 
+_SLASH = re.compile(r"(?<![\w/])#?([a-z]{0,4}\d{1,4})\s*/\s*([a-z]{0,4}\d{1,4})(?![\d/])")
+_PROMO = re.compile(r"\b(mep|svp|swsh|sm|xy|bw|dp|hgss|pr)\s*-?\s*(?:en\s*)?(\d{1,3})\b")
+
+
+def _num(s):
+    """Pure. '017' -> '17', 'TG05' -> 'tg5', 'svp 027' -> 'svp27'."""
+    s = re.sub(r"\s+", "", s.lower())
+    return re.sub(r"(?<![0-9])0+(\d)", r"\1", s)
+
+
+def number_conflict(title, number):
+    """Pure. The title names another card's printed number, so it is a different card whatever its name says:
+    a printed number ('017/078', 'Pikachu 179/131') with none of them ours (card number AND set size),
+    or a promo code ('MEP 131', 'SVP 027') when ours isn't that promo. 'Stage 2' or '50 HP' don't count.
+    Seen in stored sales: 'Blastoise 017/078 Pokémon GO' as Base Set 2/102, 'Pikachu 12/17' as 13/17."""
+    t = title.lower()
+    left, _, total = number.lower().partition("/")
+    mine_left, mine_total = _num(left), _num(total)
+    found = _SLASH.findall(t)
+    if found and not any(_num(a) == mine_left and (not mine_total or _num(b) == mine_total) for a, b in found):
+        return True
+    promos = [_num(p + n) for p, n in _PROMO.findall(t)]
+    # only for a numbered set card ('131/131'): a promo of ours ('027', 'SM210') is written with these codes
+    return bool(promos and mine_total) and mine_left not in promos
+
+
 def title_ok(title, required=(), excluded=TITLE_JUNK, number=None, lang=None):
     """Does an active-listing title describe this exact card/product?"""
     t = title.lower()
@@ -193,21 +222,50 @@ def title_ok(title, required=(), excluded=TITLE_JUNK, number=None, lang=None):
         left, _, total = number.lower().partition("/")
         if not (_has(t, left) or _has(t, left.lstrip("0") or "0")):
             return False
-        # '215/163' is another set's card (or a foreign print) even though '215' matches
-        totals = re.findall(rf"(?<![\w]){re.escape(left.lstrip('0') or '0')}\s*/\s*0*(\d{{2,3}})", re.sub(r"\b0+(\d)", r"\1", t))
-        if total.isdigit() and totals and int(total) not in {int(x) for x in totals}:
+        if number_conflict(t, number):
             return False
     if lang == "en" and _has_any(t, OTHER_LANG):
         return False
     if lang == "ja" and not _has_any(t, ("japanese", "jpn", "japan")):
         return False
+    if lang == "zh" and not _has_any(t, ("chinese", "simplified", "s-chinese")):
+        return False
     return True
 
 
-def junk_title(title, lang="en"):
-    """Accessory/fake listing, or (for English cards) another language's copy: never a price point."""
+def lang_word(lang):
+    """Word added to an eBay search so it finds that language's copies (English needs none)."""
+    return {"ja": " japanese", "zh": " chinese"}.get(lang, "")
+
+
+def junk_title(title, lang="en", number=None):
+    """Accessory/fake listing, a multi-card lot ('x10 Pikachu'), (for English cards) another language's copy, or
+    (when the card's number is given) a title naming another card's number: never a price point."""
     t = (title or "").lower()
-    return _has_any(t, TITLE_JUNK) or (lang == "en" and _has_any(t, OTHER_LANG))
+    return _has_any(t, TITLE_JUNK) or bool(LOT.search(t)) or (lang == "en" and _has_any(t, OTHER_LANG)) \
+        or bool(number and number_conflict(t, number))
+
+
+@lru_cache(maxsize=8192)
+def card_number(card_key):
+    """The card's printed number ('183/165', 'TG05'), from what the app already stored, else the catalog; None for
+    sealed products or when unknown. Lets stored sales/listings naming another number be ignored when read."""
+    if card_key.startswith("sealed:"):
+        return None
+    r = db.q("SELECT number FROM followed WHERE card_key=? AND number IS NOT NULL AND number != '' "
+             "UNION ALL SELECT number FROM cards_seen WHERE card_key=? AND number IS NOT NULL AND number != '' LIMIT 1",
+             (card_key, card_key))
+    if r:
+        return r[0]["number"]
+    try:
+        lang, cid = card_key.split(":", 1)
+        c = catalog.card(lang, cid)
+        return catalog.printed_number(c) if c else None
+    except Exception:
+        return None
+
+
+LOT = re.compile(r"(?<![\w/])(?:x\s?(?:[2-9]|\d{2,3})|(?:[2-9]|\d{2,3})\s?x)(?![\w/])")   # 'x10', '3x'; not '×2' weakness
 
 
 def parse_query(q):
@@ -283,7 +341,7 @@ def refresh_asks(card_key, query, check, fixed_bucket=None, condition_ids=None, 
 
 
 def _card_search(name_en, number, lang):
-    q = f"{name_en} {number.split('/')[0]}" + (" japanese" if lang == "ja" else "")
+    q = f"{name_en} {number.split('/')[0]}" + lang_word(lang)
     first = name_en.split(" ")[0]
     return q, (lambda t: title_ok(t, [first], number=number, lang=lang))
 
@@ -626,8 +684,9 @@ def ask_values(card_key):
     if not latest:
         return {}
     by, lang, sealed = {}, card_key.split(":", 1)[0], card_key.startswith("sealed:")
+    num = None if sealed else card_number(card_key)
     for r in db.q("SELECT bucket, total, title FROM asks WHERE card_key=? AND seen_on=?", (card_key, latest)):
-        if sealed or not junk_title(r["title"], lang):
+        if sealed or not junk_title(r["title"], lang, num):
             by.setdefault(r["bucket"], []).append(r["total"])
     out = {}
     for b, totals in by.items():
@@ -737,23 +796,192 @@ def searched_value(items, b, name_en, number, lang):
     return round(statistics.median(kept), 2), len(kept)
 
 
+# Sold price without postage ÷ median asking price incl. postage, measured 2026-11-17 over 113 cards with 3+ tracked
+# raw sales (quartiles 0.62 / 0.71 / 0.81). Fallback for a price band with too few cards to learn its own ratio.
+SOLD_PER_ASK = 0.72
+ASK_BANDS = (10, 25, 60)   # £ asking median: under 10 / 10-25 / 25-60 / 60+ (2026-11-19: 0.64 / 0.75 / 0.69 / 0.75)
+
+
+def _band(ask):
+    return sum(ask >= b for b in ASK_BANDS)
+
+
+def ratios_by_band(pairs, min_cards=10):
+    """Pure. pairs: [(ask median, sold median ÷ ask median)] per card -> {band: median ratio} for bands with
+    >= min_cards cards; other bands are left out (they use SOLD_PER_ASK)."""
+    by = {}
+    for ask, r in pairs:
+        by.setdefault(_band(ask), []).append(r)
+    return {b: round(statistics.median(v), 3) for b, v in by.items() if len(v) >= min_cards}
+
+
+def learned_ratios():
+    """{band: ratio} learned from cards with 3+ tracked raw sales and 5+ listings today; recomputed once a day."""
+    today = date.today().isoformat()
+    cached = db.setting("sold_per_ask_learned")
+    if cached and cached.get("day") == today:
+        return {int(k): v for k, v in cached["ratios"].items()}
+    pairs = []
+    for r in db.q("SELECT card_key FROM sales WHERE bucket='Raw' GROUP BY card_key HAVING COUNT(*) >= 3"):
+        s, a = values(r["card_key"], postage=False).get("Raw"), ask_values(r["card_key"]).get("Raw")
+        if s and s["n"] >= 3 and a and a["n"] >= 5 and a["market"] > 0:
+            pairs.append((a["market"], s["market"] / a["market"]))
+    ratios = ratios_by_band(pairs)
+    db.set_setting("sold_per_ask_learned", {"day": today, "ratios": ratios})
+    return ratios
+
+
+def sold_per_ask(ask):
+    """(ratio, note) for a card whose median asking price is `ask`."""
+    r = learned_ratios().get(_band(ask))
+    return (r, f"× {r} (learned for this price band)") if r else (SOLD_PER_ASK, f"× {SOLD_PER_ASK}")
+
+
+def _legacy_id(item_id):
+    """Pure. 'v1|123456789|0' (Browse API) -> '123456789' (the listing number on ebay.co.uk)."""
+    parts = str(item_id).split("|")
+    return parts[1] if len(parts) > 1 else parts[0]
+
+
+def _wmedian(pairs):
+    """Pure. Weighted median of [(value, weight)]."""
+    pairs = sorted(pairs)
+    half, acc = sum(w for _, w in pairs) / 2, 0.0
+    for v, w in pairs:
+        acc += w
+        if acc >= half:
+            return v
+    return pairs[-1][0]
+
+
+def blend(solds, asks, ratio, today=None, half_life=45, k_cap=1.5):
+    """Pure. Market = what the card sells for, item price without postage, from SOLDS (weighted more: they sold)
+    and today's LISTINGS (converted to a sold-equivalent). Design reviewed with Fable, 2026-11-22.
+      solds: [(item price, 'YYYY-MM-DD', best_offer)]  asks: [listing totals incl. postage]  ratio: f(ask median)
+    - each sale weighs 0.5^(age/half_life); a Best-Offer sale (accepted offer hidden) counts at 90 % with half weight
+    - listings: asks outside 0.5-3x their median dropped; L = median x sold/ask ratio; weight min(1.5, m/4), capped
+      because the ratio's per-card error (IQR 0.62-0.81) doesn't shrink with more listings
+    - sold outliers: kept within median/b .. median*b, b = exp(3 * 1.4826 * MAD(ln price)) clamped to 1.6-2.5
+      (centred on the sales alone: sales that agree are real even when listings ask far more);
+      1-2 sales aren't dropped but weigh x0.25 when outside 0.5-2x L
+    - market = (n_eff * S + k * L) / (n_eff + k), S = weighted median of the kept sales
+    Returns dict(market, S, L, n_sold, n_eff, m, k, rejected, check=[reasons to look before posting]) or None."""
+    import math
+    today = today or date.today()
+    age = lambda d: max(0, (today - date.fromisoformat(d[:10])).days)
+    L = m = None
+    if asks:
+        med = statistics.median(asks)
+        asks = [a for a in asks if 0.5 * med <= a <= 3 * med]
+        m = len(asks)
+        L = statistics.median(asks) * ratio(statistics.median(asks))
+    pts = [(p * (0.9 if bo else 1.0), 0.5 ** (age(d) / half_life) * (0.5 if bo else 1.0), age(d))
+           for p, d, bo in solds if p and p > 0 and age(d) <= 365]
+    rejected = 0
+    if len(pts) >= 3:
+        xs = [p for p, _, _ in pts]
+        centre = statistics.median(xs)   # sales that agree with each other are never thrown out because of asks
+        lmed = statistics.median(math.log(x) for x in xs)
+        mad = statistics.median(abs(math.log(x) - lmed) for x in xs)
+        b = min(2.5, max(1.6, math.exp(3 * 1.4826 * mad)))
+        kept = [t for t in pts if centre / b <= t[0] <= centre * b]
+        rejected = len(pts) - len(kept)
+        pts = kept
+    elif pts and L:
+        pts = [(p, w * (0.25 if not 0.5 * L <= p <= 2 * L else 1.0), a) for p, w, a in pts]
+    if not pts and L is None:
+        return None
+    n_eff = sum(w for _, w, _ in pts)
+    S = _wmedian([(p, w) for p, w, _ in pts]) if pts else None
+    k = min(k_cap, m / 4) if L else 0.0
+    market = ((n_eff * S if S else 0) + k * (L or 0)) / ((n_eff if S else 0) + k)
+    check = []
+    if n_eff + k < 1.5 and market >= 10:
+        check.append("very little eBay data for this card")
+    if S and L and n_eff >= 1 and m >= 3 and not 0.67 <= S / L <= 1.5:
+        check.append(f"sold (£{S:.2f}) and listings (≈£{L:.2f}) disagree")
+    if rejected and rejected > (len(pts) + rejected) / 3:
+        check.append(f"{rejected} odd sales left out")
+    if market >= 60 and sum(1 for _, _, a in pts if a <= 60) < 2:
+        check.append("high value with under 2 sales in 60 days")
+    return {"market": round(market, 2), "S": S and round(S, 2), "L": L and round(L, 2), "n_sold": len(pts),
+            "n_eff": round(n_eff, 2), "m": m or 0, "k": round(k, 2), "rejected": rejected, "check": check}
+
+
+def blended_market(card_key, grader=None, grade=None, condition="NM"):
+    """(value, stats, basis) from stored eBay data: blend() of this bucket's sales (item price) and today's tracked
+    listings. Graded buckets never mix with raw; played raw = the Raw blend x condition multiplier. Listings of
+    your own (posted from this app) are left out so your price never feeds itself. (None, None, None) if no data."""
+    b, mult, tag = _bucket_mult(grader, grade, condition)
+    lang, num = card_key.split(":", 1)[0], card_number(card_key)
+    solds = [(r["price"], r["sold_at"], r["bo"]) for r in db.q(
+        "SELECT price, sold_at, COALESCE(best_offer, 0) bo, title, source FROM sales WHERE card_key=? AND bucket=?",
+        (card_key, b)) if r["source"] == "own" or not junk_title(r["title"], lang, num)]
+    mine = {str(r["listing_id"]) for r in db.q("SELECT listing_id FROM drafts WHERE listing_id IS NOT NULL")}
+    latest = db.q("SELECT MAX(seen_on) d FROM asks WHERE card_key=? AND bucket=?", (card_key, b))[0]["d"]
+    asks = [r["total"] for r in db.q("SELECT item_id, total, title FROM asks WHERE card_key=? AND bucket=? AND seen_on=?",
+                                     (card_key, b, latest))
+            if not junk_title(r["title"], lang, num) and _legacy_id(r["item_id"]) not in mine] if latest else []
+    # a market moving fast (listing median >20 % off a month ago): recent sales matter more
+    hist = db.q("SELECT median FROM ask_daily WHERE card_key=? AND bucket=? AND seen_on <= date('now', '-28 day') "
+                "ORDER BY seen_on DESC LIMIT 1", (card_key, b))
+    moving = bool(hist and asks and abs(statistics.median(asks) / hist[0]["median"] - 1) > 0.2)
+    r = blend(solds, asks, lambda a: sold_per_ask(a)[0], half_life=14 if moving else 45)
+    if not r:
+        return None, None, None
+    parts = ([f"{r['n_sold']} sold (weight {r['n_eff']})"] if r["n_sold"] else []) + \
+            ([f"{r['m']} listings × {sold_per_ask(statistics.median(asks))[0]} (weight {r['k']})"] if r["m"] else [])
+    stats = {**r, "kind": "blend", "n": r["n_sold"] + r["m"], "low_confidence": bool(r["check"])}
+    return round(r["market"] * mult, 2), stats, f"{b}{tag} · eBay blend: " + " + ".join(parts) + \
+        (" · fast-moving market: recent sales weighted more" if moving else "")
+
+
+def _bucket_mult(grader, grade, condition):
+    b = f"{grader.upper()} {grade}" if grader else "Raw"
+    mult, learned = (1.0, "") if grader else condition_mult(condition)
+    return b, mult, (f" × {mult}{learned}" if mult != 1 else "")
+
+
+def sold_item_market(card_key, grader=None, grade=None, condition="NM"):
+    """Market as pokepulse quotes it: median eBay sold price WITHOUT postage (>=3 sales, summarize's rules).
+    Raw LP/MP/HP = the Raw median × condition multiplier. (value, stats, basis) or (None, None, None)."""
+    b, mult, tag = _bucket_mult(grader, grade, condition)
+    s = values(card_key, postage=False).get(b)
+    if not s or s["n"] < 3:
+        return None, None, None
+    return round(s["market"] * mult, 2), s, f"{b}{tag} · eBay sold ×{s['n']} ({s['window']}), median without postage"
+
+
+def item_market(card_key, grader=None, grade=None, condition="NM"):
+    """Stored data only (no eBay call): sold median without postage, else today's tracked asks × SOLD_PER_ASK."""
+    v = sold_item_market(card_key, grader, grade, condition)
+    if v[0] is not None:
+        return v
+    b, mult, tag = _bucket_mult(grader, grade, condition)
+    a = ask_values(card_key).get(b)
+    if not a:
+        return None, None, None
+    r, note = sold_per_ask(a["market"])
+    return round(a["market"] * r * mult, 2), {**a, "kind": "estimate"}, \
+        f"{b}{tag} · estimate: {a['n']} listings' median {note} (no solds yet)"
+
+
 def searched_market(name_en, number, lang, grader=None, grade=None, condition="NM"):
-    """Market value from one live eBay UK search for '<name> <number>' (e.g. 'Charizard ex 183/165'): the median
-    fixed-price listing in the same condition. Raw LP/MP/HP = the Raw median × condition multiplier.
-    Returns (value, stats, basis) like market_for, or (None, None, None) when nothing matches. 1 Browse call."""
+    """Estimated sold price (without postage) from one live eBay UK search for '<name> <number>' (e.g.
+    'Charizard ex 183/165'): the median fixed-price listing in the same condition × SOLD_PER_ASK.
+    Raw LP/MP/HP = × condition multiplier. (value, stats, basis), or (None, None, None) when nothing matches."""
     if not (name_en or "").strip() or not (number or "").strip():
         return None, None, None   # unread card: nothing sensible to search for
     if grader and not grade:
         return None, None, None   # graded but grade unknown: no bucket to price from
-    q = re.sub(r"\s*&\s*", " & ", f"{name_en.strip()} {number.strip()}") + (" japanese" if lang == "ja" else "")
-    b = f"{grader.upper()} {grade}" if grader else "Raw"
+    q = re.sub(r"\s*&\s*", " & ", f"{name_en.strip()} {number.strip()}") + lang_word(lang)
+    b, mult, tag = _bucket_mult(grader, grade, condition)
     value, n = searched_value(ebay.search_active(q), b, name_en, number, lang)
     if value is None:
         return None, None, None
-    mult, learned = (1.0, "") if grader else condition_mult(condition)
-    tag = f" × {mult}{learned}" if mult != 1 else ""
-    return round(value * mult, 2), {"kind": "search", "n": n, "low_confidence": n < 3}, \
-        f"{b}{tag} · eBay search '{q}' median of {n}"
+    r, note = sold_per_ask(value)
+    return round(value * r * mult, 2), {"kind": "search", "n": n, "low_confidence": n < 3}, \
+        f"{b}{tag} · estimate: eBay search '{q}' median of {n} {note} (no solds yet)"
 
 
 def market_for(card_key, grader=None, grade=None, condition="NM", card=None, bucket=None):

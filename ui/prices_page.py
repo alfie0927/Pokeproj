@@ -242,7 +242,7 @@ def card_view(lang, card_id):
     g1, g2 = st.columns([2, 3])
     chart = pd.DataFrame([{"Condition": b, "£": v[0]} for b, v in vals.items() if v[0] and b != "Raw played"])
     if not chart.empty:
-        g1.bar_chart(chart, x="Condition", y="£", horizontal=True, color="#7C5CFF")
+        g1.bar_chart(chart, x="Condition", y="£", horizontal=True, color="#FFCB05")
     rows = []
     for b in buckets:
         a, s_ = asks.get(b) or {}, sold.get(b) or {}

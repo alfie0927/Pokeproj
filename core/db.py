@@ -98,6 +98,12 @@ DEFAULTS = {
     "deal_auto": True,            # scan continuously in the background while the app runs
     "deal_ocr": True,             # OCR listing photos when the title has no card number
     "deal_min_market": 5.0,       # ...and only cards worth at least this much (skips £2 commons)
+    "best_offer": False,           # new listings accept offers; eBay answers them automatically (below)
+    "bo_accept_pct": 92.0,         # ...accept offers at or above this % of your price
+    "bo_decline_pct": 80.0,        # ...decline offers under this %; in between you decide in Seller Hub
+    "stale_days": 14,              # Live on eBay: flag listings unsold after this many days
+    "sheet_auto": True,            # update the Excel workbook after posting, price pushes and sales
+    "sheet_path": "",              # "" = the .xlsm in the project folder
     "ebay_username": "",
     "fulfillment_policy": "", "payment_policy": "", "return_policy": "",
     "location_key": "home", "postcode": "",

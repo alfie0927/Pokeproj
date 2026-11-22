@@ -60,6 +60,10 @@ def test_target_price():
     assert (p, used) == (95.0, "market") and warn                         # no listing -> market fallback
     assert tp("market", 5, None, None, 0)[0] is None                      # no data -> manual
     assert tp("market", 50, 1.0, None, 0.85)[0] == 0.99                   # floor
+    d = {"own_market": 100.0, "name": "Charizard ex", "number": "183/165", "language": "en", "graded": False,
+         "grader": None, "grade": None, "condition": "NM"}
+    assert listing.price_draft(d, "market", 5) is None                   # your own figure: no eBay search
+    assert (d["market"], d["price"], d["market_basis"]) == (100.0, listing.priced("market", 5, 100.0, None)[0], "your figure")
 
 
 def test_tracked_postage():
@@ -70,11 +74,12 @@ def test_tracked_postage():
     assert ebay.postage_for(50.0) == ("LETTER", 1.55)                     # no tracked policy chosen: always letter
     db.set_setting("tracked_policy", "TRACKED")
     assert ebay.postage_for(19.99) == ("LETTER", 1.55) and ebay.postage_for(20.0) == ("TRACKED", 3.5)
-    pr = lambda m: listing.priced("market", 0, m, None)[0]
+    assert listing.priced("market", 5, 40.0, None)[0] == 38.0            # market has no postage in it: just 5 % off
+    pr = lambda t: listing.priced("lowest", 0, None, t)[0]               # cheapest listing is a total: postage off
     assert pr(15.0) == 13.45                                              # 15 - 1.55 letter
     assert pr(40.0) == 36.5                                               # 40 - 3.50 tracked
     assert pr(22.0) == 19.99                  # 22-3.50 = 18.50 drops under the line: letter, just under it
-    assert pr(None) is None
+    assert listing.priced("market", 0, None, None)[0] is None
 
 
 def test_draft_save_keeps_typed_price():
@@ -351,6 +356,22 @@ def test_market_priority():
     assert prices.market_for(k, condition="LP")[0] == 40.0
 
 
+def test_item_market():
+    """List cards market = sold median WITHOUT postage (pokepulse's way); asks × SOLD_PER_ASK until 3 sales exist."""
+    db = _fresh_db()
+    k, today = "en:test-3", date.today().isoformat()
+    assert prices.item_market(k) == (None, None, None)
+    db.many("INSERT INTO asks (item_id, seen_on, card_key, bucket, title, total, url) VALUES (?,?,?,?,?,?,?)",
+            [(f"a{i}", today, k, "Raw", "t", v, "") for i, v in enumerate([38.0, 40.0, 42.0])])
+    v, st_, basis = prices.item_market(k)
+    assert v == round(40.0 * prices.SOLD_PER_ASK, 2) and st_["kind"] == "estimate" and "no solds yet" in basis
+    db.many(prices.SALE_INSERT, [(f"s{i}", k, "Raw", "t", p, 2.7, today, "", "", "ebay", 0)
+                                 for i, p in enumerate([29.3, 29.82, 31.9])])
+    v, st_, basis = prices.item_market(k)
+    assert v == 29.82 and "without postage" in basis                    # not 32.52 (with postage)
+    assert prices.item_market(k, condition="LP")[0] == round(29.82 * 0.8, 2)
+
+
 def test_title_junk():
     ok = lambda t: prices.title_ok(t, ["Umbreon"], number="215/203", lang="en")
     assert ok("Umbreon VMAX 215/203 Evolving Skies Secret Rare Full Art Holo")
@@ -501,6 +522,11 @@ def test_pair_photos():
            ("c2", fronts[2]), ("d1", backs[3]), ("d2", fronts[3]), ("e1", backs[4]), ("e2", fronts[4])]
     pairs = vision.pair_photos(seq)
     assert [(seq[f][0], seq[b][0]) for f, b in pairs] == [("a1", "a2"), ("b2", "b1"), ("c2", "c1"), ("d2", "d1"), ("e2", "e1")]
+    # neighbour pairing: front/back decided inside each pair, either way round; a non card-by-card batch is refused
+    s = {i: float(i in (1, 2, 5)) for i in range(6)}
+    f = {i: i in (1, 2, 5) for i in range(6)}
+    assert vision.order_pairs([0, 1, 2, 3, 4, 5], s, f)[0] == [(0, 1), (3, 2), (4, 5)]
+    assert vision.order_pairs([0, 3, 4, 1, 2, 5], s, f)[0] is None
     # one card: nothing to compare, so filename order decides (natural sort: IMG_9 before IMG_10)
     assert vision.pair_photos([("IMG_10", backs[0]), ("IMG_9", fronts[0])]) == [(1, 0)]
 
@@ -717,6 +743,165 @@ def test_searched_value():
     assert prices.searched_market("", "183/165", "en") == (None, None, None)
     assert prices.searched_market("Charizard ex", None, "en") == (None, None, None)
     assert prices.searched_market("Charizard ex", "183/165", "en", "PSA", None) == (None, None, None)
+
+
+def test_blend():
+    from datetime import date as D
+    t = D(2026, 11, 22)
+    r = lambda a: 0.72
+    # solds only: weighted median, the recent sale counts most; one fake £400 sale is left out
+    s = [(30.0, "2026-11-20", 0), (29.0, "2026-11-10", 0), (31.0, "2026-10-01", 0), (400.0, "2026-11-21", 0)]
+    b = prices.blend(s, [], r, t)
+    assert b["market"] in (29.0, 30.0) and b["rejected"] == 1 and b["n_sold"] == 3
+    # listings only: median x ratio, capped weight
+    b = prices.blend([], [40.0, 42.0, 44.0, 200.0, 5.0], r, t)
+    assert b["market"] == round(42.0 * 0.72, 2) and b["m"] == 3 and b["k"] == 0.75
+    # solds outweigh listings: 3 fresh sales at £30 vs listings implying £36
+    b = prices.blend([(30.0, "2026-11-21", 0)] * 3, [50.0] * 8, r, t)
+    assert 30 < b["market"] < 32.5 and not b["check"]
+    # Best Offer sale counts at 90 % and half weight
+    b = prices.blend([(100.0, "2026-11-21", 1)], [], r, t)
+    assert b["market"] == 90.0
+    # a lone stale sale far from listings barely counts; sold vs listing disagreement is flagged
+    b = prices.blend([(10.0, "2026-06-01", 0)], [100.0] * 6, r, t)
+    assert b["market"] > 60
+    b = prices.blend([(10.0, "2026-11-21", 0)] * 4, [100.0] * 6, r, t)
+    assert any("disagree" in c for c in b["check"])
+    assert prices.blend([], [], r, t) is None
+    assert prices._legacy_id("v1|123456|0") == "123456"
+
+
+def test_wrong_card_titles():
+    nc = prices.number_conflict
+    # real stored sales attached to the wrong card
+    assert nc("The Pokémon Company Blastoise 017/078 Pokémon GO Holo Rare Stage 2 170 HP ENG", "2/102")
+    assert nc("Pikachu Hyper Rare Prismatic Evolutions Pokemon Card YCG 179/131 Raw", "131/131")
+    assert nc("Pokémon Run Pikachu MEP 131 Stamped Asia Exclusive Promo", "131/131")
+    assert nc("2007 Pokémon POP Series 5 | Pikachu | 13/17 | Non Holo", "12/17")
+    # the right card, however it's written
+    assert not nc("Charizard ex 183/165 151 Ultra Rare NM", "183/165")
+    assert not nc("Pikachu SVP 027 Pokemon Center Promo", "027")
+    assert not nc("Kingdra TG03/TG30 Astral Radiance", "TG03")
+    assert not nc("Mew ex 053/165 Pokemon 151", "53/165") and not nc("Venusaur Stage 2 Base Set", "15/102")
+    assert prices.junk_title("x10 Pokemon RUN Pikachu MEP Promo 131", "en")
+    assert prices.junk_title("Nidoking 174/165 Art Rare Jap 2023", "en")
+    assert not prices.junk_title("Charizard ex 183/165 NM", "en", "183/165")
+    assert prices.junk_title("Pikachu 179/131 Prismatic", "en", "131/131")
+
+
+def test_ratios_by_band():
+    pairs = [(5, 0.6)] * 9 + [(5, 0.7)] + [(30, 0.8)] * 3          # 10 cheap cards, 3 mid-price
+    assert prices.ratios_by_band(pairs) == {0: 0.6}                    # too few 25-60 cards: left to SOLD_PER_ASK
+    assert prices._band(9.99) == 0 and prices._band(10) == 1 and prices._band(60) == 3
+
+
+def test_best_offer_terms():
+    from core import ebay
+    assert ebay.best_offer_terms(20, enabled=False) is None
+    t = ebay.best_offer_terms(20, True, 92, 80)
+    assert t == {"bestOfferEnabled": True, "autoAcceptPrice": {"value": "18.40", "currency": "GBP"},
+                 "autoDeclinePrice": {"value": "16.00", "currency": "GBP"}}
+    assert "autoDeclinePrice" not in ebay.best_offer_terms(20, True, 92, 0)
+    assert ebay.rescale_offer_terms(t, 20, 10)["autoAcceptPrice"]["value"] == "9.20"
+
+
+def test_stale_check():
+    assert listing.stale_check(20, 20, 3, 14) == (None, None)
+    assert listing.stale_check(25, 20, 3, 14) == ("above market", 19.0)      # market × 0.95
+    assert listing.stale_check(20, 22, 15, 14) == ("unsold 15 d", 19.0)       # at least 5 % under today's price
+    assert listing.stale_check(1.0, None, 30, 14) == ("unsold 30 d", 0.99)
+
+
+def test_sheet_plan():
+    from core import sheet
+    assert sheet.card_label({"name": "Rayquaza VMAX", "number": "TG20/TG30", "graded": True, "grader": "ace",
+                             "grade": 9}) == "Rayquaza VMAX TG20/TG30 ACE 9"
+    rows = [["Mew 53/108", 5, 10, None, None],                 # typed by you, unsold: claimed
+            ["Gulpin 154/142", None, 7, 7, None],               # sold already: left alone
+            [None, None, None, None, None],
+            ["Pikachu 1/1", None, 4, None, "PP-2"]]             # tagged by an earlier sync
+    items = [{"sku": "PP-1", "name": "mew 53/108", "buy": 3, "listing": 12.0, "sold": None},
+             {"sku": "PP-2", "name": "Pikachu 1/1", "buy": None, "listing": 4, "sold": 4.5},
+             {"sku": "PP-3", "name": "Gulpin 154/142", "buy": None, "listing": 6.0, "sold": None}]
+    w = sheet.plan(rows, items, first_row=18)
+    assert (18, 5, "PP-1") in w and (18, 3, 12.0) in w and not any(r == 18 and c == 2 for r, c, _ in w)  # buy kept
+    assert (21, 4, 4.5) in w and not any(r == 21 and c == 3 for r, c, _ in w)
+    assert (22, 1, "Gulpin 154/142") in w and (22, 5, "PP-3") in w and (22, 3, 6.0) in w   # new row at the end
+    assert not any(r == 19 for r, _, _ in w)
+    assert sheet.match_key("Kingdra TG03/TG30") == sheet.match_key("Kingdra TG3") == "kingdra tg3"
+    assert sheet.card_label({"name": "HPL", "number": "", "title": "Meowth 0207/07 Chinese"}) == "Meowth 0207/07 Chinese"
+    assert sheet.match_key("Mega Greninja ex 114/083") == sheet.match_key("mega greninja ex 114/83")
+    assert sheet.match_key("Snorlax SVP051") == sheet.match_key("Snorlax SVP51")
+    assert sheet.match_key("Snorlax 15/112 ACE 7") != sheet.match_key("Snorlax 15/112")
+
+
+def test_chinese_and_ranked_names():
+    from core import vision
+    # real first read of the Simplified Chinese Meowth (CBB3C 0207/07): 2-character name, no kana -> zh
+    lines = [("基础", .4, .041, .025), ("喵喵", .3, .061, .060), ("700", .8, .057, .071), ("HP", .7, .073, .027),
+             ("招财猫", .5, .585, .043), ("抛掷1次硬币如果为正面，则选择对手的1只备战宝可梦，将其", .5, .631, .029),
+             ("与战斗宝可梦互换。", .3, .662, .029), ("CBB3C", .2, .945, .026), ("0207/07★★", .3, .951, .032)]
+    p = vision.parse_lines(lines)
+    assert p["name"] == "喵喵" and p["language"] == "zh"
+    assert vision.ZH_NUMBER.search("0207/07★★").group(0) == "0207/07"
+    assert vision.parse_lines([("ニャース", .3, .06, .06), ("たね", .1, .04, .02), ("ねこにばん", .5, .6, .03),
+                               ("ワザ", .5, .7, .03)])["language"] == "ja"
+    # Mew GG10/GG70: 166 Mew cards; the one whose number was read must come before the fetch limit
+    briefs = [{"id": f"x-{i}", "localId": str(i)} for i in range(1, 150)] + [{"id": "swsh12.5-GG10", "localId": "GG10"}]
+    assert vision.rank_briefs(briefs, ["GG10/GG70", "★"])[0]["id"] == "swsh12.5-GG10"
+    assert listing.title_for({"name": "Meowth", "number": "0207/07", "set_name": "", "language": "zh", "graded": False,
+                              "condition": "NM"}) == "Meowth 0207/07 Chinese NM Pokemon Card"
+    assert prices.title_ok("Meowth 0207/07 Chinese CBB3C", ["Meowth"], lang="zh")
+    assert not prices.title_ok("Meowth 0207/07 Japanese", ["Meowth"], lang="zh")
+
+
+def test_name_year_narrowing():
+    from core import vision
+    c = lambda i, name, date: {"id": i, "name": name, "set": {"releaseDate": date}, "localId": i.split("-")[1]}
+    balls = [c("bw5-102", "Ultra Ball", "2012-02-08"), c("xy12-102", "Ultra Ball", "2016-11-02")]
+    assert [x["id"] for x in vision.narrow(balls, "Ultra Ball", 2016)] == ["xy12-102"]
+    pair = [c("sm11-241", "Raichu & Alolan Raichu GX", "2019-08-02"), c("sm12-241", "Ultra Prism Trainer", "2019-11-01")]
+    assert [x["id"] for x in vision.narrow(pair, "Raichu & AlolanRaichu", 2019)] == ["sm11-241"]
+    assert len(vision.narrow(balls, "Ultra Ball", None)) == 2                    # no year read: still a choice
+    lines = [("Pikachuv.18", .3, .06, .05), ("SUPPDRTER", .2, .04, .02), ("©2014 Pokemon.", .5, .98, .02)]
+    p = vision.parse_lines(lines)
+    assert p["name"] == "Pikachu" and p["year"] == 2014
+    assert vision.parse_lines([("©1995, 96, 98 Nintendo ©1999 Wizards", .5, .97, .02), ("Mew", .3, .06, .05)])["year"] == 1999
+    assert vision.parse_lines([("Mr. Mime", .3, .06, .05)])["name"] == "Mr. Mime"
+    assert vision.number_similarity("SVPe 148 ★", "148") == 1.0                 # bare promo number, whole word
+    assert vision.number_similarity("1148", "148") == 0.0 and vision.number_similarity("-20 +10", "20") == 0.0
+    assert vision.number_similarity("RC18/RC25•", "RC18") == 1.0 and vision.number_similarity("bonGrphisXY04", "XY04") == 0.0
+    assert vision.parse_lines([("33/34", .9, .95, .02), ("3", .95, .96, .02)])["number"] == "33/34"
+    assert vision.parse_lines([("199/", .2, .95, .02), ("165", .25, .95, .02)])["number"] == "199/165"
+    assert vision.parse_lines([("Special", .2, .05, .03), ("2014 Pokamon", .3, .97, .02)]) \
+        == {**vision.parse_lines([("2014 Pokamon", .3, .97, .02)]), "name": ""}
+    assert vision.parse_lines([("2014 Pokamon", .3, .97, .02)])["year"] == 2014
+    assert vision.parse_lines([("1S6/128", .3, .96, .02)])["number"] == "156/128"
+    assert vision.number_variants("88/950")[:2] == ["88/950", "88/95"]
+    assert "073/088" in vision.number_variants("ORE073/088") and vision.number_variants("199/165") == ["199/165"]
+    assert vision.digits_fixed("2O1/165") == "201/165" and vision.digits_fixed("199/l65") == "199/165"
+    assert vision.digits_fixed("SV2a 2014 Pokemon") == "SV2a 2014 Pokemon"
+    assert vision.parse_lines([("Ho-Oh", .3, .05, .04), ("BASIC", .2, .07, .02)])["name"] == "Ho-Oh"
+    potion = [("ENERGY", .4, .07, .05), ("Potion Energy", .3, .52, .03), ("Special Energy Card", .6, .52, .018),
+              ("If you play this card from your hand, remove", .5, .56, .02), ("1 damage counter from the", .5, .58, .02),
+              ("attach it to, if it has any.", .5, .6, .02)]
+    assert vision.parse_lines(potion)["name"] == "Potion Energy"
+    holo = [("STAGE 2", .1, .03, .02), ("Flower Pokémon. Length: 3' 11\", Weight: 41 lbs.", .5, .45, .02),
+            ("Paradise Pollen", .3, .5, .03)]
+    assert vision.parse_lines(holo)["name"] == ""    # a Pokémon card: never a mid-card line as its name
+    assert vision.parse_lines([("Morpekoex180C", .3, .06, .05)])["name"] == "Morpekoex"
+    assert vision.one_char_off("135", "155") and vision.one_char_off("010", "16") and not vision.one_char_off("2", "125")
+    assert not vision.one_char_off("135", "135")
+    assert vision.parse_lines([("Kommo-0", .3, .06, .05)])["name"] == "Kommo-o"
+    assert vision.parse_lines([("Porygon2", .3, .06, .05)])["name"] == "Porygon2"
+    assert vision.parse_lines([("HP110A", .8, .05, .05), ("Porygon2", .3, .06, .04)])["name"] == "Porygon2"
+    noisy = [("Golem ex", .3, .08, .05), ("一二", .5, .95, .01), ("三四", .6, .95, .01), ("五六", .7, .95, .01)]
+    assert vision.parse_lines(noisy)["language"] == "en"
+    g = vision.parse_lines([("Gallade 四", .3, .06, .05), ("Psychic Cut", .5, .6, .03)])
+    assert g["language"] == "en" and g["name"] == "Gallade"
+    from core import catalog
+    assert catalog.physical([{"id": "A1-131"}, {"id": "P-A-041"}, {"id": "sv03-223"}]) in ([{"id": "sv03-223"}],
+                                                                                          [{"id": "A1-131"}, {"id": "P-A-041"}, {"id": "sv03-223"}])
 
 
 if __name__ == "__main__":

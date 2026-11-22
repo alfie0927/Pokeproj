@@ -3,7 +3,7 @@ import os
 
 import streamlit as st
 
-from core import db, ebay, prices, vision
+from core import db, ebay, prices, sheet, vision
 from ui.common import env_pills, header, limits, money, section
 
 
@@ -39,6 +39,16 @@ def page():
                                              help="eBay's free limit is 5,000/day. The daily refresh, deal scanner "
                                                   "and 6-hourly checks stop at this number."),
             "postcode": c3.text_input("Item location postcode", db.setting("postcode")),
+            "best_offer": c2.toggle("Best Offer on new listings", bool(db.setting("best_offer")),
+                                    help="eBay answers offers for you using the two figures below. Applies to cards "
+                                         "posted from now on; live listings are not changed."),
+            "bo_accept_pct": c2.number_input("Auto-accept offers from % of price", 1.0, 99.0,
+                                             float(db.setting("bo_accept_pct")), 1.0),
+            "bo_decline_pct": c2.number_input("Auto-decline offers under % of price", 0.0, 98.0,
+                                              float(db.setting("bo_decline_pct")), 1.0,
+                                              help="Offers in between wait for you in Seller Hub. 0 = never auto-decline."),
+            "stale_days": c2.number_input("Flag live listings unsold after (days)", 1, 365,
+                                          int(db.setting("stale_days"))),
         }
         vals["footer"] = st.text_area("Description footer", db.setting("footer"))
         if st.form_submit_button("Save settings", type="primary"):
@@ -107,8 +117,35 @@ def page():
         if st.button("Sync my sold orders"):
             try:
                 st.success(f"Added {prices.sync_own_sales()} of your sales")
+                if msg := sheet.sync_quiet():
+                    st.info(msg)
             except Exception as e:
                 st.error(str(e))
+    with st.container(border=True):
+        st.markdown("**Excel spreadsheet**")
+        wbp = sheet.workbook_path()
+        st.caption(f"Workbook: **{wbp.name if wbp else 'none found'}** · sheet **{sheet.SHEET}** · every card this "
+                   "app posts gets a row (A card, B buy price from Inventory, C listing price, D sold price, E the eBay "
+                   "SKU so the row is found again). A row you typed yourself with the same card name is used instead "
+                   "of adding a new one. Your buy and sold figures are never overwritten. A dated backup goes to "
+                   "data/sheet_backups before the first change each day.")
+        last = db.setting("sheet_last")
+        if last:
+            st.caption(f"Last update {last['at'].replace('T', ' ')}: {last['msg']}")
+        s1, s2, s3 = st.columns([2, 2, 3])
+        auto = s1.toggle("Update automatically", bool(db.setting("sheet_auto")),
+                         help="After posting, price pushes, syncing your sold orders and the daily refresh.")
+        if auto != bool(db.setting("sheet_auto")):
+            db.set_setting("sheet_auto", auto)
+        path_in = s3.text_input("Workbook path (blank = the .xlsm in the project folder)", db.setting("sheet_path"))
+        if path_in != db.setting("sheet_path"):
+            db.set_setting("sheet_path", path_in.strip().strip('"'))
+        if s2.button("Update spreadsheet now"):
+            with st.spinner("Writing to Excel…"):
+                try:
+                    st.success(sheet.sync())
+                except Exception as e:
+                    st.error(f"Couldn't update the spreadsheet: {e}")
     section("eBay price data")
     c1, c2 = st.columns(2)
     with c1.container(border=True):

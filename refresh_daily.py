@@ -49,6 +49,8 @@ def main():
             totals["own"] = prices.sync_own_sales()
         except ebay.EbayError as e:
             print(f"own orders: {e}", file=sys.stderr)
+    from core import sheet
+    print(sheet.sync_quiet() or "spreadsheet sync off", file=sys.stderr)
     print(f"cards refreshed {totals.pop('cards')}/{len(plan)}"
           + (" (stopped at this job's share of the Browse budget; the rest go first tomorrow)" if totals.pop("stopped") else "")
           + f"; listings checked -> {totals or 'nothing to check yet'}; calls used {prices.calls_today() - before}")

@@ -15,7 +15,20 @@ Pokémon card price tracker (eBay UK), sealed EV ranking and an AI eBay listing 
    removing accessories/fakes/foreign copies (stickers, binder inserts, metal cards, keyrings, Spanish…), listings
    with another set's number (`215/163` for `215/203`) and anything under 40 % of the median.
 
-Market value = manual override → sold median (≥3 sales in 90 days: the 30-day median when there are 3+ that
+**List cards** market = what the card sells for, item price **without postage** (how pokepulse quotes it), as a
+blend of eBay **sales** and today's **listings**, sales weighted more (`prices.blend`, design reviewed with Fable):
+each sale weighs ½ every 45 days (14 when the market moved >20 % in a month), a Best-Offer sale 90 % at half weight;
+listings count as their median × the sold ÷ asking ratio learned daily per price band (2026-11-19: 0.64 under £10,
+0.75 £10–25, 0.70 £25–60, 0.75 £60+), weighing at most 1.5 sales. Odd sales outside a spread-based band
+(1.6–2.5× the median) and listings outside 0.5–3× theirs are left out; fakes, lots (`x10`), other languages, graded
+copies and **titles naming another card's number** (`Blastoise 017/078` is not Base Set 2/102, `MEP 131` is not
+131/131) never count, and your own listings never feed your price. Backtest on the latest sale of 81 cards: median
+error 14.5 % (old method 18.5 %); one sale differs from the next by a median 20 %, so that's about the limit.
+A draft says *Check the price* only when the data is thin on a £10+ card, sales and listings disagree, many sales
+looked odd, or a £60+ card has under 2 sales in 60 days. With no stored data (e.g. Chinese cards) a live eBay search
+is used. The strategy applies to that figure, so 5 % under = market × 0.95. Each draft has an *Open on pokepulse* link
+and a *Market £* box: type your own figure and the strategy applies to that instead (0 = back to eBay). Elsewhere,
+market value = manual override → sold median (≥3 sales in 90 days: the 30-day median when there are 3+ that
 recent, else the latest 10; Best-Offer sales dropped once 3 clean sales exist) → asks low quartile (≥3 listings) →
 "thin" (1–2 sales/listings, shown but never used for deals) → none. **Cardmarket is never used for prices**: it's
 shown on the card view as an EU reference, and only fills in sealed-EV hit cards that have no eBay data yet
@@ -58,10 +71,25 @@ draft (defaults to NM). Tips: photograph straight-on, in focus, with the bottom 
 5. Test posting with `EBAY_ENV = "sandbox"` first, then switch to `"production"`.
 
 ## Pages
-- **List cards** — upload front/back photos in any order → cards identified and priced → **review grid** (set
+- **List cards** — upload front/back photos in any order or with any file names: they're put in shooting order by
+  each photo's capture time (kept by AirDrop; file names otherwise), neighbours are paired and the back is found by
+  matching the printed card-back design (`core/card_back_en.jpg`; Japanese backs by likeness). Shown as card rows:
+  **drag a photo onto another to swap**, ⇄ swaps a card's front and back (`ui/photo_order/`, no extra package). The
+  caption says how the order was decided and asks you to check when the photos had neither capture times nor
+  ordered names. Then cards are identified and priced → **review grid** (set
   condition, price, title, tick Accept, Save) → **Post** with a progress bar and cancel. Header shows your eBay
   listing allowance; posting is blocked with a reason when it's 0. **Live on eBay** syncs real prices from eBay
   (incl. Seller Hub edits), shows market now and a suggested price per listing, and lets you push price changes.
+  Listings more than 10 % above market or unsold after N days (Settings) are flagged ⚠; one button fills their
+  suggested prices into the table, and nothing changes on eBay until you press Push. **Best Offer** (Settings, off
+  by default) puts new listings on Best Offer with eBay auto-accepting from X % and auto-declining under Y % of the
+  price; a price push moves both figures with the price.
+- **Excel spreadsheet** (Settings): every card the app posts gets a row on the workbook's *Pokemon* sheet (A card,
+  B buy price, C listing price, D sold price, E eBay SKU), matched to a row you typed yourself when the name and
+  number agree (`Kingdra TG03` = `Kingdra TG03/TG30`). Your buy and sold figures are never overwritten. It runs
+  after posting, price pushes, syncing your sold orders and the daily refresh, through Excel itself so macros, stock
+  data and FILTER formulas survive. If the workbook is open, the changes go into the open window for you to save.
+  Dated backup in `data/sheet_backups/` before the first write each day. Needs `pip install pywin32`.
 - **Card prices** — one search box (`charizard 199`, `sv08 238`, `199/165`, `Kingdra TG03`, `リザードン`), era filter,
   market overview (tracked cards, risers/fallers, watchlist with trend lines, recently viewed), card view with value
   by condition, history, live UK listings with photos, Watch, and **List this card →** (skips identification).

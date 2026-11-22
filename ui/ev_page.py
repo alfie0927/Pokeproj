@@ -234,7 +234,7 @@ def set_details(era):
                 "of the EV; rest Cardmarket for now")])
         contrib = {k: v for k, v in (info.get("contrib") or {}).items() if v > 0.005}
         if contrib:
-            st.bar_chart(pd.Series(contrib, name="£ per pack").sort_values(), horizontal=True, color="#7C5CFF")
+            st.bar_chart(pd.Series(contrib, name="£ per pack").sort_values(), horizontal=True, color="#FFCB05")
     with c2:
         st.markdown("**Chase cards**")
         top = pd.DataFrame(info.get("top") or [])
