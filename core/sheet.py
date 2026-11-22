@@ -1,7 +1,10 @@
 """Keep your Excel workbook's Pokemon sheet in step with the cards this app lists and sells.
 
 Columns (as in the workbook): A card, B buy price, C listing price, D sold price; this app also writes the eBay
-SKU (PP-<draft id>) in column E so it finds the same row again. Writing goes through Excel itself (COM), which
+SKU (PP-<draft id>) in column E so it finds the same row again. Cards ticked "Add to spreadsheet" get a new row
+(A name, C listing price). A sale goes in where you'd type it: column C of 'Unsold Stuff', next to the card; your
+sheet's macro then moves it into that card's C and D on the Pokemon tab. Sold prices are net (what eBay pays you
+after fees, minus your posting cost). Writing goes through Excel itself (COM), which
 keeps the workbook's macros, stock data types, FILTER formulas and pictures intact (openpyxl would drop them).
 """
 import datetime
@@ -16,6 +19,7 @@ from . import db
 
 ROOT = Path(__file__).resolve().parent.parent
 SHEET, FIRST_ROW = "Pokemon", 18          # card rows start under the totals block
+UNSOLD = "Unsold Stuff"                   # FILTER of unsold rows; column D = the Pokemon row number
 A, B, C, D, E = 1, 2, 3, 4, 5
 _lock = threading.Lock()
 
@@ -39,18 +43,12 @@ def card_label(d):
 
 
 def items():
-    """[{sku, name, buy, listing, sold}] for every card this app posted (live or ended)."""
+    """[{sku, name, listing, sold, gross, add}] for every card this app posted (live or ended). sold = net £."""
     out = []
-    for r in db.q("SELECT id, listing_id, data_json FROM drafts WHERE status IN ('posted', 'ended') AND listing_id IS NOT NULL"):
+    for r in db.q("SELECT id, data_json FROM drafts WHERE status IN ('posted', 'ended') AND listing_id IS NOT NULL"):
         d = json.loads(r["data_json"])
-        buy = None
-        if d.get("inventory_id"):
-            got = db.q("SELECT cost FROM inventory WHERE id=?", (d["inventory_id"],))
-            buy = got[0]["cost"] if got else None
-        sold = db.q("SELECT price FROM sales WHERE source='own' AND url LIKE ? ORDER BY sold_at DESC LIMIT 1",
-                    (f"%/{r['listing_id']}",))
-        out.append({"sku": f"PP-{r['id']}", "name": card_label(d), "buy": buy, "listing": d.get("price"),
-                    "sold": sold[0]["price"] if sold else None})
+        out.append({"sku": f"PP-{r['id']}", "name": card_label(d), "listing": d.get("price"),
+                    "sold": d.get("sold_net"), "gross": d.get("sold_gross"), "add": bool(d.get("to_sheet"))})
     return out
 
 
@@ -62,33 +60,38 @@ def match_key(s):
 
 def plan(rows, items, first_row=FIRST_ROW):
     """Pure. rows: the sheet's A..E values from first_row down ([[a, b, c, d, e], ...]).
-    Returns [(row, col, value)] to write: a row already tagged with the SKU is updated; else the first untagged,
-    unsold row with the same card name is claimed (you typed it in yourself); else a new row goes at the end.
-    Never overwrites your buy or sold figures; the listing price follows eBay."""
+    Returns (writes [(row, col, value)], sells [(row, net £)]).
+    A row tagged with the SKU is this card's row; else the first untagged, unsold row with the same card name is
+    claimed (you typed it in yourself). No row: a new one at the end, only for cards ticked "Add to spreadsheet".
+    Unsold: C follows the eBay price. Sold with D empty: a sale to enter via Unsold Stuff. A sold row still showing
+    the gross price an earlier sync wrote gets the net price instead. Never touches your buy price."""
     tagged = {str(r[4]).strip(): i for i, r in enumerate(rows) if r[4] not in (None, "")}
-    claimed, writes = set(), []
+    claimed, writes, sells = set(tagged.values()), [], []
     end = first_row + max([i for i, r in enumerate(rows) if any(v not in (None, "") for v in r)], default=-1) + 1
     for it in items:
         i = tagged.get(it["sku"])
-        if i is None:
+        if i is None and (it["add"] or it["sold"] is not None):
             i = next((j for j, r in enumerate(rows) if j not in claimed and r[4] in (None, "") and r[3] in (None, "")
                       and match_key(r[0]) == match_key(it["name"])), None)
             if i is not None:
                 writes.append((first_row + i, E, it["sku"]))
-        if i is None:   # new row
-            writes += [(end, A, it["name"]), (end, E, it["sku"])] + \
-                      [(end, col, it[k]) for col, k in ((B, "buy"), (C, "listing"), (D, "sold")) if it[k] is not None]
-            end += 1
+        if i is None and not it["add"]:
             continue
-        claimed.add(i)
-        r, row = rows[i], first_row + i
-        if it["buy"] is not None and r[1] in (None, ""):
-            writes.append((row, B, it["buy"]))
-        if it["listing"] is not None and r[2] != it["listing"]:
-            writes.append((row, C, it["listing"]))
-        if it["sold"] is not None and r[3] in (None, ""):
-            writes.append((row, D, it["sold"]))
-    return writes
+        if i is None:   # new row
+            row, r = end, [it["name"], None, it["listing"], None, it["sku"]]
+            writes += [(row, A, it["name"]), (row, E, it["sku"])] + ([(row, C, it["listing"])] if it["listing"] else [])
+            end += 1
+        else:
+            claimed.add(i)
+            row, r = first_row + i, rows[i]
+        if it["sold"] is None:
+            if it["listing"] is not None and r[3] in (None, "") and r[2] != it["listing"]:
+                writes.append((row, C, it["listing"]))
+        elif r[3] in (None, ""):
+            sells.append((row, it["sold"]))
+        elif it["gross"] is not None and r[3] == it["gross"] and it["sold"] != it["gross"]:
+            writes += [(row, C, it["sold"]), (row, D, it["sold"])]
+    return writes, sells
 
 
 def _retry(fn, wait=120):
@@ -128,15 +131,18 @@ def sync():
             if wb is None:
                 xl = win32com.client.DispatchEx("Excel.Application")
                 xl.Visible, xl.DisplayAlerts = False, False
+                xl.AutomationSecurity = 1          # macros on, so your Unsold Stuff macro handles sales
                 wb, opened = _retry(lambda: xl.Workbooks.Open(str(path))), True
             try:
                 ws = _retry(lambda: wb.Worksheets(SHEET))
                 last = max(_retry(lambda: ws.Cells(ws.Rows.Count, A).End(-4162).Row), FIRST_ROW)   # -4162 = xlUp
                 vals = _retry(lambda: ws.Range(ws.Cells(FIRST_ROW, A), ws.Cells(last, E)).Value)
                 rows = [list(r) for r in (vals if isinstance(vals[0], tuple) else (vals,))]
-                writes = plan(rows, its)
+                writes, sells = plan(rows, its)
                 for row, col, v in writes:
                     _retry(lambda: setattr(ws.Cells(row, col), "Value", v))
+                for row, v in sells:
+                    _sell(xl, wb, ws, row, v)
                 if opened:
                     _retry(wb.Save)
             finally:
@@ -145,11 +151,30 @@ def sync():
                     xl.Quit()
         finally:
             pythoncom.CoUninitialize()
-    n_rows = len({r for r, _, _ in writes})
-    msg = (f"Spreadsheet: {n_rows} row(s) updated from {len(its)} listed card(s)"
-           + ("" if opened or not writes else " (written into your open workbook: save it in Excel)"))
+    n_rows = len({r for r, _, _ in writes} | {r for r, _ in sells})
+    msg = (f"Spreadsheet: {n_rows} row(s) updated, {len(sells)} sale(s) entered"
+           + ("" if opened or not (writes or sells) else " (written into your open workbook: save it in Excel)"))
     db.set_setting("sheet_last", {"at": datetime.datetime.now().isoformat(timespec="seconds"), "msg": msg})
     return msg
+
+
+def _sell(xl, wb, ws, row, v):
+    """Type the net sale price into Unsold Stuff column C on the line for Pokemon row `row`, as you would; the
+    sheet's macro copies it to that row's C and D and clears the cell. If macros didn't run, do the same here."""
+    us = _retry(lambda: wb.Worksheets(UNSOLD))
+    _retry(xl.Calculate)
+    last = max(_retry(lambda: us.Cells(us.Rows.Count, D).End(-4162).Row), 2)
+    col = _retry(lambda: us.Range(us.Cells(2, D), us.Cells(last, D)).Value)
+    col = [c[0] for c in col] if isinstance(col, tuple) else [col]
+    k = next((j for j, x in enumerate(col) if isinstance(x, (int, float)) and int(x) == row), None)
+    if k is not None:
+        xl.EnableEvents = True
+        _retry(lambda: setattr(us.Cells(2 + k, C), "Value", v))
+        if _retry(lambda: us.Cells(2 + k, C).Value) in (None, ""):
+            return                                   # macro moved it
+        _retry(lambda: us.Cells(2 + k, C).ClearContents())
+    for c in (C, D):                                 # macros off, or the row isn't in the filter yet
+        _retry(lambda: setattr(ws.Cells(row, c), "Value", v))
 
 
 def backup(path):

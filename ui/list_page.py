@@ -4,6 +4,7 @@ import json
 import os
 import re
 import string
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -55,6 +56,9 @@ def upload_panel():
         strategy = c1.radio("Pricing", list(strategies), format_func=strategies.get, horizontal=True,
                             index=list(strategies).index(cur) if cur in strategies else 0)
         pct = c2.number_input("X %", 0.0, 90.0, float(db.setting("pct_below")), 1.0)
+        to_sheet = st.checkbox("Add to spreadsheet", bool(db.setting("sheet_add")),
+                               help="New cards that aren't in your workbook yet get a row on the Pokemon tab "
+                                    "(card name in A, listing price in C). Change it per card in the Sheet column below.")
         files = files or []
         if files and len(files) % 2:
             st.error(f"{len(files)} photos — need an even number (front + back per card).")
@@ -83,10 +87,11 @@ def upload_panel():
         if st.button(f"Identify & price {len(pairs)} card(s)", type="primary"):
             orders.pop(ids, None)
             db.set_setting("strategy", strategy)
-            process(pairs, strategy, pct, (pre["lang"], pre["id"]) if pre else None)
+            db.set_setting("sheet_add", to_sheet)
+            process(pairs, strategy, pct, (pre["lang"], pre["id"]) if pre else None, to_sheet)
 
 
-def process(pairs, strategy, pct, card=None):
+def process(pairs, strategy, pct, card=None, to_sheet=False):
     UPLOADS.mkdir(parents=True, exist_ok=True)
     jobs = []
     for f, b in pairs:
@@ -106,6 +111,7 @@ def process(pairs, strategy, pct, card=None):
             did = futs[fut]
             try:
                 d = fut.result()
+                d["to_sheet"] = to_sheet
                 if inv_id:
                     d["inventory_id"] = inv_id
                     inventory.set_listed(inv_id, did)
@@ -179,7 +185,7 @@ def review():
         "Condition": f"{d['grader']} {d['grade']}" if d.get("graded") else (d.get("condition") or "NM"),
         "Market £": d.get("market"), "Cheapest £": (d.get("lowest") or {}).get("total"),
         "Price £": float(d.get("price") or 0), "Buyer pays £": round((d.get("price") or 0) + ebay.postage_for(d.get("price") or 0)[1], 2),
-        "Status": r["status"], "Accept": r["status"] == "accepted",
+        "Status": r["status"], "Sheet": bool(d.get("to_sheet")), "Accept": r["status"] == "accepted",
         "Checks": len([w for w in d.get("warnings", []) if "photo pairing" not in w or "," in w])}
         for r, d in zip(rows, data)])
     graded_opts = sorted({v for v in df["Condition"] if v not in CONDITIONS})
@@ -200,10 +206,11 @@ def review():
             "Buyer pays £": st.column_config.NumberColumn(format="£%.2f", width="small",
                                                           help="Price + postage (letter or tracked, see Settings; "
                                                                "private sellers: eBay adds its buyer fee on top)"),
+            "Sheet": st.column_config.CheckboxColumn(width="small", help="Add to spreadsheet when posted"),
             "Accept": st.column_config.CheckboxColumn(width="small"),
             "Checks": st.column_config.NumberColumn(width="small", help="Things to double-check, see Details")})
     changed = [(r, d, e) for r, d, (_, e), (_, o) in zip(rows, data, edited.iterrows(), df.iterrows())
-               if any(e[k] != o[k] for k in ("Title", "Condition", "Price £", "Accept"))]
+               if any(e[k] != o[k] for k in ("Title", "Condition", "Price £", "Sheet", "Accept"))]
     b1, b2, b3 = st.columns([1.3, 1.3, 3])
     if b1.button(f"Save {len(changed)} change(s)", type="primary", disabled=not changed):
         save_grid(changed)
@@ -224,6 +231,7 @@ def save_grid(changed):
     for r, d, e in changed:
         cond = e["Condition"] if e["Condition"] in CONDITIONS else d.get("condition")
         listing.apply_grid_row(d, e["Title"], cond, float(e["Price £"] or 0), d.get("strategy") or strategy, pct)
+        d["to_sheet"] = bool(e["Sheet"])
         listing.save(r["id"], d, "accepted" if e["Accept"] else ("draft" if r["status"] == "accepted" else r["status"]))
     st.toast(f"Saved {len(changed)} draft(s)")
     st.rerun()
@@ -378,7 +386,19 @@ def live_market(d):
 def _sync_live():
     """Live prices read from eBay at most every 15 minutes for all sessions (was ~3 s on every new browser session);
     the Sync button and a price push clear it."""
-    return listing.sync_live_prices()
+    ended = db.q("SELECT COUNT(*) n FROM drafts WHERE status='ended'")[0]["n"]
+    out = listing.sync_live_prices()
+    if db.q("SELECT COUNT(*) n FROM drafts WHERE status='ended'")[0]["n"] > ended:   # maybe sold: record the sale
+        threading.Thread(target=_record_sales, daemon=True).start()                 # + spreadsheet, off the page
+    return out
+
+
+def _record_sales():
+    try:
+        prices.sync_own_sales()
+        sheet.sync_quiet()
+    except Exception:
+        pass   # the daily job and Settings → sync sold catch up
 
 
 def live_listings():

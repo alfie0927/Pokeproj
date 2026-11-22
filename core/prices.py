@@ -575,25 +575,37 @@ def infer_sales(card_key=None):
     return counts
 
 
-def sync_own_sales():
-    """Your own eBay orders for cards listed through this app -> sales (source 'own'). Returns rows added."""
+def sync_own_sales(since=None):
+    """Your own eBay orders for cards listed through this app -> sales (source 'own'), and each sold draft gets
+    sold_gross (item price) and sold_net: its share of what eBay pays you (after eBay's fees and any refund, buyer's
+    postage included) minus your posting cost (Settings). Returns rows added. since=None: since the last sync."""
     import json
-    since = db.setting("own_synced_at") or (datetime.now(timezone.utc) - timedelta(days=90)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
-    drafts = {f"PP-{r['id']}": json.loads(r["data_json"]) for r in db.q("SELECT id, data_json FROM drafts WHERE status='posted'")}
-    rows, now = [], datetime.now(timezone.utc)
+    since = since or db.setting("own_synced_at") or (datetime.now(timezone.utc) - timedelta(days=90)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    drafts = {f"PP-{r['id']}": (r["id"], json.loads(r["data_json"]))
+              for r in db.q("SELECT id, data_json FROM drafts WHERE status IN ('posted', 'ended')")}
+    rows, now, post_cost = [], datetime.now(timezone.utc), float(db.setting("postage_cost") or 0)
     for o in ebay.orders(since):
         if (o.get("cancelStatus") or {}).get("cancelState") == "CANCELED" or o.get("orderPaymentStatus") not in (None, "PAID"):
             continue
+        pay = o.get("paymentSummary") or {}
+        due = float((pay.get("totalDueSeller") or {}).get("value", 0)) -             sum(float((r.get("amount") or {}).get("value", 0)) for r in pay.get("refunds") or [])
+        total = float(((o.get("pricingSummary") or {}).get("total") or {}).get("value", 0)) or 1.0
         for li in o.get("lineItems", []):
-            d = drafts.get(li.get("sku"))
-            if not d or not d.get("card_key"):
+            did, d = drafts.get(li.get("sku"), (None, None))
+            if not d:
+                continue
+            gross = float(li["lineItemCost"]["value"])
+            d.update(sold_gross=gross, sold_at=o["creationDate"][:10],
+                     sold_net=round(due * float((li.get("total") or {}).get("value", gross)) / total - post_cost, 2))
+            db.run("UPDATE drafts SET data_json=? WHERE id=?", (json.dumps(d), did))
+            if d.get("inventory_id"):
+                from . import inventory
+                inventory.mark_sold(d["inventory_id"], gross, o["creationDate"][:10])
+            if not d.get("card_key"):
                 continue
             b = f"{d['grader']} {d['grade']}" if d.get("graded") else ("Raw" if (d.get("condition") or "NM") == "NM" else "Raw played")
             ship = float(((li.get("deliveryCost") or {}).get("shippingCost") or {}).get("value", 0))
-            if d.get("inventory_id"):
-                from . import inventory
-                inventory.mark_sold(d["inventory_id"], float(li["lineItemCost"]["value"]), o["creationDate"][:10])
-            rows.append((li["lineItemId"], d["card_key"], b, li.get("title") or d.get("title"), float(li["lineItemCost"]["value"]),
+            rows.append((li["lineItemId"], d["card_key"], b, li.get("title") or d.get("title"), gross,
                          ship, o["creationDate"][:10], ebay.listing_url(li.get("legacyItemId", "")), now.isoformat(), "own", 0))
     db.many(SALE_INSERT, rows)
     db.set_setting("own_synced_at", now.strftime("%Y-%m-%dT%H:%M:%S.000Z"))

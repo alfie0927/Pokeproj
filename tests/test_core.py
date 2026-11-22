@@ -819,14 +819,19 @@ def test_sheet_plan():
     rows = [["Mew 53/108", 5, 10, None, None],                 # typed by you, unsold: claimed
             ["Gulpin 154/142", None, 7, 7, None],               # sold already: left alone
             [None, None, None, None, None],
-            ["Pikachu 1/1", None, 4, None, "PP-2"]]             # tagged by an earlier sync
-    items = [{"sku": "PP-1", "name": "mew 53/108", "buy": 3, "listing": 12.0, "sold": None},
-             {"sku": "PP-2", "name": "Pikachu 1/1", "buy": None, "listing": 4, "sold": 4.5},
-             {"sku": "PP-3", "name": "Gulpin 154/142", "buy": None, "listing": 6.0, "sold": None}]
-    w = sheet.plan(rows, items, first_row=18)
+            ["Pikachu 1/1", None, 4, None, "PP-2"],             # tagged by an earlier sync, now sold
+            ["Eevee 1/1", 2, 8, 8, "PP-5"]]                     # sold; an earlier sync wrote the gross £8
+    it = lambda sku, name, listing, sold=None, gross=None, add=True:         {"sku": sku, "name": name, "listing": listing, "sold": sold, "gross": gross, "add": add}
+    items = [it("PP-1", "mew 53/108", 12.0), it("PP-2", "Pikachu 1/1", 4, 3.1, 4.5, add=False),
+             it("PP-3", "Gulpin 154/142", 6.0), it("PP-4", "Zubat 1/1", 3.0, add=False),
+             it("PP-5", "Eevee 1/1", 8, 6.2, 8.0, add=False), it("PP-6", "Onix 2/2", 5.0, 3.5, 5.0)]
+    w, sells = sheet.plan(rows, items, first_row=18)
     assert (18, 5, "PP-1") in w and (18, 3, 12.0) in w and not any(r == 18 and c == 2 for r, c, _ in w)  # buy kept
-    assert (21, 4, 4.5) in w and not any(r == 21 and c == 3 for r, c, _ in w)
-    assert (22, 1, "Gulpin 154/142") in w and (22, 5, "PP-3") in w and (22, 3, 6.0) in w   # new row at the end
+    assert (21, 3.1) in sells and not any(r == 21 for r, _, _ in w)        # sale goes via Unsold Stuff
+    assert (23, 1, "Gulpin 154/142") in w and (23, 5, "PP-3") in w and (23, 3, 6.0) in w   # new row at the end
+    assert not any(v == "PP-4" for _, _, v in w)                          # not ticked: no new row
+    assert (22, 3, 6.2) in w and (22, 4, 6.2) in w                        # gross corrected to net
+    assert (24, 1, "Onix 2/2") in w and (24, 3.5) in sells                # added and already sold
     assert not any(r == 19 for r, _, _ in w)
     assert sheet.match_key("Kingdra TG03/TG30") == sheet.match_key("Kingdra TG3") == "kingdra tg3"
     assert sheet.card_label({"name": "HPL", "number": "", "title": "Meowth 0207/07 Chinese"}) == "Meowth 0207/07 Chinese"
