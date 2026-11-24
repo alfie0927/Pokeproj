@@ -78,6 +78,9 @@ def upload_panel():
         files = files or []
         if files and len(files) % 2:
             st.error(f"{len(files)} photos — need an even number (front + back per card).")
+            if st.button(f"Remove all {len(files)} photos"):
+                st.session_state.up_n += 1
+                st.rerun()
             return
         if pre and len(files) > 2:
             st.error("Listing one chosen card: upload exactly 2 photos (front + back).")
@@ -86,7 +89,12 @@ def upload_panel():
             return
         ids = tuple(x.file_id for x in files)
         saved = [saved_at.get(f"{x.name}|{x.size}") for x in files]
+        if all(saved) and max(saved) > (time.time() - 600) * 1000:
+            saved = [None] * len(files)   # iPhone gives the moment you picked them, in no set order: use picked order
         idx, how = cached_pairs((ids, tuple(saved)), [(x.name, x.getvalue()) for x in files], saved)
+        db.set_setting("last_photo_upload", {"how": how, "names": [x.name for x in files],   # to diagnose order issues
+                                             "saved": [saved_at.get(f"{x.name}|{x.size}") for x in files],
+                                             "at": int(time.time() * 1000), "pairs": idx})
         auto = [i for pair in idx for i in pair]
         if len(auto) != len(files):   # fronts and backs didn't come out even: the rest go last, for you to place
             st.warning("Couldn't find a back for every front. Arrange the photos below: each card is front, then back.")
@@ -101,7 +109,12 @@ def upload_panel():
         manual = ids in orders
         st.caption(("Your order (dragged). " if manual else f"Order from {how}. ")
                    + "Drag a photo onto another to swap them, or press ⇄ to swap a card's front and back.")
-        if st.button(f"Identify & price {len(pairs)} card(s)", type="primary"):
+        b1, b2 = st.columns([3, 1])
+        if b2.button(f"Remove all {len(files)} photos", width="stretch"):
+            orders.pop(ids, None)
+            st.session_state.up_n += 1   # fresh, empty uploader
+            st.rerun()
+        if b1.button(f"Identify & price {len(pairs)} card(s)", type="primary"):
             orders.pop(ids, None)
             db.set_setting("strategy", strategy)
             db.set_setting("sheet_add", to_sheet)
