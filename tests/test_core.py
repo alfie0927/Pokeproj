@@ -529,6 +529,17 @@ def test_pair_photos():
     assert vision.order_pairs([0, 3, 4, 1, 2, 5], s, f)[0] is None
     # one card: nothing to compare, so filename order decides (natural sort: IMG_9 before IMG_10)
     assert vision.pair_photos([("IMG_10", backs[0]), ("IMG_9", fronts[0])]) == [(1, 0)]
+    # slab backs through plastic score as low as 4 (real batch): decided against their neighbour, not the cutoff
+    real = [0, 38, 0, 49, 0, 51, 4, 31, 0, 4, 0, 149, 0, 79, 0, 5, 5, 47, 0, 5, 0, 82, 0, 34, 0, 531, 0, 473]
+    import unittest.mock as um
+    with um.patch.object(vision, "back_points", side_effect=real):
+        _, fl = vision.back_scores([None] * len(real))
+    assert fl == [j % 2 == 1 for j in range(len(real))]
+    ff = [0, 0, 5, 0, 0, 4, 0, 0, 500, 480, 470, 510]   # all fronts first, then backs: not paired as neighbours
+    with um.patch.object(vision, "back_points", side_effect=ff), um.patch.object(
+            vision, "_similar_backs", return_value=([0.0] * 12, [False] * 12)):
+        _, fl = vision.back_scores([None] * len(ff))
+    assert fl == [False] * 12
     assert vision.numbered(["IMG_4522.jpeg", "IMG_4521.jpeg"])
     assert vision.numbered(["IMG-20261123-WA0012.jpg", "IMG-20261123-WA0003.jpg"])
     wa = ["WhatsApp Image 2026-11-24 at 08.31.45 (2).jpeg", "WhatsApp Image 2026-11-24 at 08.31.45.jpeg",
@@ -931,6 +942,32 @@ def test_labels():
     assert [x["orderId"] for x in got] == ["a", "f"]
     pdf = labels.render(labels.address_lines(de) + ["A very long extra line that must shrink the font to fit"], "Me, 2 Road, X1 1XX", "eBay 105")
     assert pdf[:4] == b"%PDF"
+
+
+def test_slab_labels():
+    from core import vision
+    L = lambda *rows: [(t, x, y, 0.06) for t, x, y in rows]
+    # real label reads (IMG_9781..9791): PSA with its name, ACE with only a logo, OCR slips and split names
+    psa = vision.parse_label(L(("200O POKEMON ROCKET", .4, .37), ("#11", .75, .37), ("DARK MAGNETON-HOLO", .4, .44),
+                               ("NM-MT", .72, .44), ("1STEDITION", .31, .5), ("8", .76, .51), ("PSA", .5, .58),
+                               ("73672583", .7, .57)))
+    assert (psa["grader"], psa["grade"], psa["cert"], psa["name"], psa["number"], psa["first_edition"]) ==         ("PSA", "8", "73672583", "DARK MAGNETON", "11", True)
+    ace = vision.parse_label(L(("2018GXULTRASHINY", .37, .28), ("EEVEE", .28, .32), ("HOLO", .27, .37),
+                               ("#201JPN", .29, .42), ("NMHMT", .67, .41), ("1531428", .67, .54)))
+    assert (ace["grader"], ace["grade"], ace["name"], ace["number"], ace["year"], ace["lang"]) ==         ("ACE", "8", "EEVEE", "201", 2018, "ja")
+    split = vision.parse_label(L(("2022POKEMON", .34, .25), ("SWSH", .5, .25), ("#TG15", .73, .24), ("FA/SYLVEON", .33, .3),
+                                 ("VMAX", .46, .302), ("MINT", .74, .3), ("BRILLIANT", .31, .35), ("9", .77, .35),
+                                 ("125740529", .7, .4), ("PA", .5, .41)))
+    assert (split["grader"], split["grade"], split["name"], split["number"]) == ("PSA", "9", "SYLVEON VMAX", "TG15")
+    big = vision.parse_label(L(("2021 CHILLING REIGN", .4, .37), ("ZERAORAV", .37, .44), ("10", .71, .45),
+                               ("SPECIALART", .35, .51), ("GEMMINT", .71, .55), ("#166", .3, .57), ("1531429", .7, .72)))
+    assert (big["grader"], big["grade"], big["name"]) == ("ACE", "10", "ZERAORAV")
+    six = vision.parse_label(L(("2000TEAM ROCKET", .4, .36), ("DARK CHARIZARD", .43, .43), ("EX-MT", .72, .54),
+                               ("#4", .29, .56), ("1644854", .71, .71)))   # big '6' not read: the word gives it
+    assert six["grade"] == "6" and six["grader"] == "ACE"
+    # a raw card's top (name, HP, attack text) is no label
+    assert vision.parse_label(L(("Altaria", .3, .1), ("m90", .7, .1), ("STAGE1", .2, .05), ("Evolves from Swablu", .4, .15))) is None
+    assert vision.parse_label(L(("Pikachu", .3, .1), ("60", .7, .1))) is None
 
 
 if __name__ == "__main__":

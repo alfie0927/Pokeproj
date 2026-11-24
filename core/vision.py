@@ -103,9 +103,10 @@ BACK_MIN = 15   # matched points: real backs 34-1000, fronts 0-4 (46 real photos
 def _back_ref():
     import cv2
     import numpy as np
-    orb = cv2.ORB_create(2000)
-    k, d = orb.detectAndCompute(np.array(Image.open(BACK_REF).convert("L")), None)
-    return orb, k, d
+    k, d = cv2.ORB_create(2000).detectAndCompute(np.array(Image.open(BACK_REF).convert("L")), None)
+    # photos get 5000 points: a back seen through slab plastic then matches 32+ (with 2000: as few as 4, the
+    # same as fronts); fronts stay <= 9 on every real photo so far, raw backs 33-1000. Same speed.
+    return cv2.ORB_create(5000), k, d
 
 
 def back_points(im):
@@ -137,6 +138,17 @@ def back_scores(ims):
     pts = [back_points(im) for im in ims]
     flags = [p >= BACK_MIN for p in pts]
     if len(ims) >= 2 and sum(flags) == len(ims) // 2:
+        return [float(p) for p in pts], flags
+    # Slab backs show the design through plastic: as few as 4 points, but still clearly more than the slab's front
+    # next to it. ims come in shooting order, so if nearly every neighbour pair has one clearly higher photo, that one
+    # is the back (all-fronts-then-backs batches don't pass: their neighbours are two fronts, both ~0).
+    chunks = [(j, j + 1) for j in range(0, len(ims) - 1, 2)]
+    unclear = sum(not (max(pts[a], pts[b]) >= 4 and max(pts[a], pts[b]) >= 3 * min(pts[a], pts[b]) + 3)
+                  for a, b in chunks)
+    if chunks and unclear <= len(chunks) // 6:
+        flags = [False] * len(ims)
+        for a, b in chunks:
+            flags[a if pts[a] > pts[b] else b] = True
         return [float(p) for p in pts], flags
     sim_scores, sim_flags = _similar_backs(ims)
     return [p + s / 1000 for p, s in zip(pts, sim_scores)], sim_flags
@@ -548,6 +560,106 @@ def parse_lines(lines):
             "grade": grade, "cert": cert, "language": lang, "year": max(years) if years else None}
 
 
+# Grade words on slab labels (PSA, ACE, BGS, CGC...), squashed: 'NM-MT' -> 'NMMT', 'GEM MINT' -> 'GEMMINT'
+GRADE_WORD = {"GEMMINT": 10, "GEMMT": 10, "PRISTINE": 10, "BLACKLABEL": 10, "MINT": 9, "NMMT": 8, "NEARMINTMINT": 8,
+              "NM": 7, "NEARMINT": 7, "EXMT": 6, "EXCELLENTMINT": 6, "EX": 5, "EXCELLENT": 5, "VGEX": 4,
+              "VERYGOODEXCELLENT": 4, "VG": 3, "VERYGOOD": 3, "GOOD": 2, "FAIR": 1.5, "POOR": 1, "PR": 1}
+
+
+def _sq(t):
+    return re.sub(r"[^A-Z0-9]", "", str(t).upper())
+
+
+def parse_label(lines):
+    """Pure. OCR lines from the top of a slab photo -> {grader, grade, cert, name, number, year, lang}, or None when
+    there's no slab label (needs a grade word and a cert number). ACE labels print no company name (logo only):
+    a 6-7 digit cert with no company word is ACE; PSA/BGS/CGC/SGC/TAG print theirs."""
+    import difflib
+    rows = [(t.strip(), cx, cy, h) for t, cx, cy, h in lines if t.strip()]
+
+    def gword(t):   # 'NM-MT' / 'GEM MINT 10'; OCR slips like 'NMHMT' still count
+        m = re.fullmatch(r"([A-Za-z][A-Za-z \-]*?)\s*\+?\s*(10|[1-9](?:\.5)?)?", t)
+        if not m:
+            return None
+        s = _sq(m[1])
+        s = s if s in GRADE_WORD else next(iter(difflib.get_close_matches(s, GRADE_WORD, 1, 0.8)), None) \
+            if len(s) >= 4 else None
+        return (GRADE_WORD[s], m[2]) if s else None
+    word = next(((g[0], cy, g[1]) for t, cx, cy, h in rows for g in [gword(t)] if g), None)
+    cert = next((t for t, *_ in rows if re.fullmatch(r"\d{6,10}", t)), None)
+    if not (word and cert):
+        return None
+    nums = [(float(t), abs(cy - word[1])) for t, cx, cy, h in rows
+            if re.fullmatch(r"10|[1-9](?:\.5)?", t) and abs(cy - word[1]) < 0.15]
+    num = float(word[2]) if word[2] else min(nums, key=lambda x: x[1])[0] if nums else None
+    grade = num if num is not None and abs(num - word[0]) < 1 else word[0]   # number must agree with the word
+    named = next((m[1] for t, *_ in rows for m in [SLAB.search(t)] if m), None)
+    # no company word: ACE prints only a logo and 6-7 digit certs; PSA's 8-9 digit certs (its logo can misread 'PA')
+    grader = {"BECKETT": "BGS"}.get(named.upper(), named.upper()) if named else \
+        "ACE" if len(cert) <= 7 else "PSA" if len(cert) <= 9 else None
+    texts = [t for t, *_ in rows]
+    yl = next(((int(m[1].upper().replace("O", "0")), cy) for t, cx, cy, h in rows   # '200O POKEMON ROCKET'
+               for m in [re.match(r"((?:19|20)[\dOo]\d|(?:19|20)\d[\dOo])(?![\dOo])", t)] if m), None)
+    number = next((m[1] for t in texts for m in [re.match(r"#\s*([A-Za-z]*\d+[a-z]?)", t)] if m), None)
+    name = None
+    if yl:   # the name is the line under the year/set line, on the left (OCR may split it: 'FA/SYLVEON' 'VMAX')
+        below = sorted((cy, cx, t) for t, cx, cy, h in rows if cy > yl[1] + 0.01 and cx < 0.6 and not t.startswith("#")
+                       and not gword(t) and not re.fullmatch(r"[\d.]+", t))
+        if below:
+            line = " ".join(t for cx, t in sorted((b[1], b[2]) for b in below if abs(b[0] - below[0][0]) < 0.02))
+            name = re.sub(r"^[A-Z]{1,3}/", "", line)                     # 'FA/SYLVEON VMAX' (full art)
+            name = re.sub(r"[-\s]+HOLO$", "", name, flags=re.I).strip()  # 'DARK MAGNETON-HOLO'
+    return {"grader": grader, "grade": ("%g" % grade), "cert": cert, "name": name, "number": number,
+            "year": yl[0] if yl else None, "lang": "ja" if any("JPN" in _sq(t) for t in texts) else "en",
+            "first_edition": any("1STEDITION" in _sq(t) or "1STED" == _sq(t) for t in texts)}
+
+
+def read_label(path):
+    """Slab label from the top of the raw photo (one ~2 s read), or None."""
+    try:
+        return parse_label(_lines(path, crop=(0.0, 0.45)))
+    except Exception:
+        return None
+
+
+def label_cards(lab):
+    """Catalog cards matching a slab label's number, name and year ([] if it doesn't say enough)."""
+    from . import catalog
+    if not (lab and lab["number"] and lab["name"]):
+        return []
+    cands = catalog.find(lab["lang"], lab["name"].title(), lab["number"]) or []
+    want = _sq(lab["name"])
+    def same(c):
+        have = _sq(catalog.english_name(lab["lang"], c) or c.get("name") or "")
+        return bool(have) and (have.startswith(want) or want.startswith(have))
+    cands = [c for c in cands if same(c)] or (cands if len(cands) == 1 else [])
+    if lab["year"] and len(cands) > 1:
+        gap = {c["id"]: abs(int((catalog.release(c) or "0")[:4] or 0) - lab["year"]) for c in cands}
+        cands = [c for c in cands if gap[c["id"]] == min(gap.values())]
+    return cands
+
+
+def apply_label(res, lab):
+    """A read with the slab label's grading (always) and card (when the label pins it down) put in."""
+    upd = {"graded": True, "grader": lab["grader"] or "Other", "grade": lab["grade"], "cert_number": lab["cert"],
+           "condition": None,
+           "uncertain_fields": [f for f in (res.uncertain_fields or []) if f not in ("grade", "cert_number", "grader")]
+           + ([] if lab["grader"] else ["grader"])}
+    if lab.get("first_edition"):
+        upd["variant"] = "first_edition"
+    cards = label_cards(lab)
+    picks = [c["id"] for c in cards]
+    if picks:
+        both = [i for i in (res.candidate_ids or []) if i in picks]
+        upd.update(candidate_ids=both or picks, language=lab["lang"])
+        if len(upd["candidate_ids"]) == 1:   # the label settled it: name and number from the catalogue
+            from . import catalog
+            c = next(c for c in cards if c["id"] == upd["candidate_ids"][0])
+            upd.update(name_en=catalog.english_name(lab["lang"], c) or c.get("name"),
+                       number=res.number or lab["number"] or catalog.printed_number(c))
+    return res.model_copy(update=upd)
+
+
 class OcrRead(CardRead):
     """CardRead plus the catalog cards the OCR backend already resolved (first = best match)."""
     candidate_ids: Optional[list[str]] = None
@@ -663,14 +775,15 @@ def _ocr(front_path, back_path, quick=False):
     (scans/renders with no background, where the 'card' found may really be the artwork window).
     quick=True (deal scanner): no rotated re-reads and no fine-detail read, so a photo that can't be read costs
     one or two reads (2-5 s) instead of up to eight (15 s+)."""
+    lab = read_label(front_path) if isinstance(front_path, (str, os.PathLike)) else None   # graded slab?
     img = _load(front_path)
     q = card_quad(img)
     tries = ([(warp_card(img, q), True)] if q is not None else []) + [(img, False)]
     for card, straight in tries:
         res = _resolve(card, straight, quick)
         if res.candidate_ids:   # one card, or a short list to pick from (re-reading the raw photo cost 8-10 s
-            return res          # and came back with the same list)
-    return res
+            break               # and came back with the same list)
+    return apply_label(res, lab) if lab else res
 
 
 def bottom_reads(lines, straight=True):
