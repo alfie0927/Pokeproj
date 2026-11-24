@@ -225,24 +225,12 @@ def upload_thumb(file_id, _data, edge=360):
 
 
 @st.cache_data(max_entries=20, show_spinner=False)
-def cached_pairs(key, _named, saved=None):
-    """(pairs, how) — see vision.pair_photos_info. key must include `saved`."""
-    return vision.pair_photos_info(_named, saved)
+def cached_pairs(key, _named):
+    """(pairs, how) — see vision.pair_photos_info."""
+    return vision.pair_photos_info(_named)
 
 
 _photo_order = None
-_file_times = None
-
-
-def file_times(key):
-    """{"name|size": ms} — when each picked/dropped photo was saved on the device (ui/file_times, invisible)."""
-    global _file_times
-    if _file_times is None:
-        import os
-        import streamlit.components.v1 as components
-        _file_times = components.declare_component(
-            "file_times", path=os.path.join(os.path.dirname(__file__), "file_times"))
-    return _file_times(key=key, default={}) or {}
 
 
 def photo_order(items, key):

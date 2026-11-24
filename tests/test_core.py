@@ -529,10 +529,6 @@ def test_pair_photos():
     assert vision.order_pairs([0, 3, 4, 1, 2, 5], s, f)[0] is None
     # one card: nothing to compare, so filename order decides (natural sort: IMG_9 before IMG_10)
     assert vision.pair_photos([("IMG_10", backs[0]), ("IMG_9", fronts[0])]) == [(1, 0)]
-    # no capture time: when each was saved on the phone beats the names
-    pairs, how = vision.pair_photos_info([("IMG_1", backs[0]), ("IMG_2", fronts[1]), ("IMG_3", fronts[0]), ("IMG_4", backs[1])],
-                                         saved=[2000, 4000, 1000, 3000])
-    assert pairs == [(2, 0), (1, 3)] and "saved on your phone" in how
     assert vision.numbered(["IMG_4522.jpeg", "IMG_4521.jpeg"])
     assert vision.numbered(["IMG-20261123-WA0012.jpg", "IMG-20261123-WA0003.jpg"])
     assert not vision.numbered(["image.jpg", "image (1).jpg"]) and not vision.numbered(["image.jpg", "image.jpg"])

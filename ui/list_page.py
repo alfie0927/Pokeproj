@@ -13,7 +13,7 @@ import pandas as pd
 import streamlit as st
 
 from core import catalog, db, ebay, inventory, listing, prices, sheet, vision
-from ui.common import (STATUS_KIND, cached_pairs, chip, data_uri, env_pills, esc, file_times, header, limits, money, photo, photo_order,
+from ui.common import (STATUS_KIND, cached_pairs, chip, data_uri, env_pills, esc, header, limits, money, photo, photo_order,
                        section, tiles, upload_thumb)
 
 UPLOADS = db.DATA / "uploads"
@@ -61,7 +61,6 @@ def upload_panel():
                 st.rerun()
         st.caption(f"From your phone (same Wi-Fi): open **http://{lan_ip()}:8501** and upload there. Pick the photos "
                    "in the order you took them (front, back, front, back…).")
-        saved_at = file_times(key=f"ft{st.session_state.up_n}")
         files = st.file_uploader("Front and back of each card, any order — backs are recognised automatically",
                                  type=["jpg", "jpeg", "png", "webp", "heic", "heif"], accept_multiple_files=True,
                                  key=f"up{st.session_state.up_n}")
@@ -88,12 +87,8 @@ def upload_panel():
         if not files:
             return
         ids = tuple(x.file_id for x in files)
-        saved = [saved_at.get(f"{x.name}|{x.size}") for x in files]
-        if all(saved) and max(saved) > (time.time() - 600) * 1000:
-            saved = [None] * len(files)   # iPhone gives the moment you picked them, in no set order: use picked order
-        idx, how = cached_pairs((ids, tuple(saved)), [(x.name, x.getvalue()) for x in files], saved)
+        idx, how = cached_pairs(ids, [(x.name, x.getvalue()) for x in files])
         db.set_setting("last_photo_upload", {"how": how, "names": [x.name for x in files],   # to diagnose order issues
-                                             "saved": [saved_at.get(f"{x.name}|{x.size}") for x in files],
                                              "at": int(time.time() * 1000), "pairs": idx})
         auto = [i for pair in idx for i in pair]
         if len(auto) != len(files):   # fronts and backs didn't come out even: the rest go last, for you to place

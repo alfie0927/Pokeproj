@@ -181,7 +181,7 @@ def order_pairs(seq, score, flag):
     return [(a, b) if score[b] >= score[a] else (b, a) for a, b in chunks], "neighbouring photos paired"
 
 
-def pair_photos_info(named, saved=None):
+def pair_photos_info(named):
     """named: [(filename, image bytes or PIL image)] in any order (uploads arrive shuffled; AirDrop renames).
     Returns (pairs [(front_index, back_index)], how): shooting order from the photos' capture times (else
     filenames), then neighbours paired; if the photos weren't shot card by card, fronts and backs are each kept
@@ -190,8 +190,6 @@ def pair_photos_info(named, saved=None):
     times = [capture_time(im) for im in ims]
     timed = all(times) and len(set(times)) == len(times)
     src = "capture time"
-    if not timed and saved and all(saved) and len(set(saved)) == len(saved):   # when each was saved on the phone
-        times, timed, src = list(saved), True, "when the photos were saved on your phone"
     by_name = not timed and numbered([n for n, _ in named])
     seq = sorted(range(len(named)), key=(lambda i: times[i]) if timed else (lambda i: _natural(named[i][0])) if by_name
                  else (lambda i: i))
