@@ -102,7 +102,7 @@ DEFAULTS = {
     "bo_accept_pct": 92.0,         # ...accept offers at or above this % of your price
     "bo_decline_pct": 80.0,        # ...decline offers under this %; in between you decide in Seller Hub
     "stale_days": 14,              # Live on eBay: flag listings unsold after this many days
-    "sheet_auto": True, "sheet_add": False,            # update the Excel workbook after posting, price pushes and sales
+    "sheet_auto": True, "sheet_add": False, "label_auto": False, "return_address": "",            # update the Excel workbook after posting, price pushes and sales
     "sheet_path": "",              # "" = the .xlsm in the project folder
     "ebay_username": "",
     "fulfillment_policy": "", "payment_policy": "", "return_policy": "",

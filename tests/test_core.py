@@ -529,6 +529,14 @@ def test_pair_photos():
     assert vision.order_pairs([0, 3, 4, 1, 2, 5], s, f)[0] is None
     # one card: nothing to compare, so filename order decides (natural sort: IMG_9 before IMG_10)
     assert vision.pair_photos([("IMG_10", backs[0]), ("IMG_9", fronts[0])]) == [(1, 0)]
+    # no capture time: when each was saved on the phone beats the names
+    pairs, how = vision.pair_photos_info([("IMG_1", backs[0]), ("IMG_2", fronts[1]), ("IMG_3", fronts[0]), ("IMG_4", backs[1])],
+                                         saved=[2000, 4000, 1000, 3000])
+    assert pairs == [(2, 0), (1, 3)] and "saved on your phone" in how
+    assert vision.numbered(["IMG_4522.jpeg", "IMG_4521.jpeg"])
+    assert vision.numbered(["IMG-20261123-WA0012.jpg", "IMG-20261123-WA0003.jpg"])
+    assert not vision.numbered(["image.jpg", "image (1).jpg"]) and not vision.numbered(["image.jpg", "image.jpg"])
+    assert not vision.numbered(["3F2A9C1E.jpeg", "photo.jpeg"]) and vision.numbered(["21_front.jpg", "21_back.jpg"])
 
 
 def test_deal_helpers():
@@ -907,6 +915,22 @@ def test_name_year_narrowing():
     from core import catalog
     assert catalog.physical([{"id": "A1-131"}, {"id": "P-A-041"}, {"id": "sv03-223"}]) in ([{"id": "sv03-223"}],
                                                                                           [{"id": "A1-131"}, {"id": "P-A-041"}, {"id": "sv03-223"}])
+
+
+def test_labels():
+    from core import labels
+    de = {"fullName": "Max Muster", "contactAddress": {"addressLine1": "Hauptstr. 1", "addressLine2": "", "city": "Berlin",
+          "stateOrProvince": "BE", "postalCode": "10115", "countryCode": "DE"}}
+    assert labels.address_lines(de) == ["Max Muster", "Hauptstr. 1", "Berlin", "BE", "10115", "GERMANY"]
+    uk = {"fullName": "A B", "contactAddress": {"addressLine1": "1 St", "city": "London", "stateOrProvince": "Greater London",
+          "postalCode": "se1 1aa", "countryCode": "GB"}}
+    assert labels.address_lines(uk) == ["A B", "1 St", "London", "SE1 1AA"]
+    o = lambda i, f="NOT_STARTED", pay="PAID", c="NONE_REQUESTED": {"orderId": i, "orderFulfillmentStatus": f,
+        "orderPaymentStatus": pay, "cancelStatus": {"cancelState": c}}
+    got = labels.due([o("a"), o("b", "FULFILLED"), o("c", pay="PENDING"), o("d", c="CANCELED"), o("e"), o("f", "IN_PROGRESS")], {"e"})
+    assert [x["orderId"] for x in got] == ["a", "f"]
+    pdf = labels.render(labels.address_lines(de) + ["A very long extra line that must shrink the font to fit"], "Me, 2 Road, X1 1XX", "eBay 105")
+    assert pdf[:4] == b"%PDF"
 
 
 if __name__ == "__main__":

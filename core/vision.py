@@ -54,6 +54,17 @@ class CardRead(BaseModel):
     uncertain_fields: list[str]
 
 
+GENERIC_NAME = re.compile(r"(image|photo|img|file)?\s*(\(\d+\))?|[0-9a-f-]{8,}", re.I)
+
+
+def numbered(names):
+    """Pure. True when file names say the shooting order ('IMG_4521.jpeg', '21_front.jpg'). False for phone and
+    browser names that don't ('image.jpg', 'image (1).jpg', random ids, the same name twice): then the order you
+    picked the photos in is used."""
+    stems = [os.path.splitext(os.path.basename(n))[0].strip() for n in names]
+    return len(set(stems)) == len(stems) and not any(GENERIC_NAME.fullmatch(s) for s in stems)
+
+
 def _natural(name):
     """'IMG_2.jpg' < 'IMG_10.jpg'."""
     return [int(t) if t.isdigit() else t.lower() for t in re.split(r"(\d+)", name)]
@@ -164,7 +175,7 @@ def order_pairs(seq, score, flag):
     return [(a, b) if score[b] >= score[a] else (b, a) for a, b in chunks], "neighbouring photos paired"
 
 
-def pair_photos_info(named):
+def pair_photos_info(named, saved=None):
     """named: [(filename, image bytes or PIL image)] in any order (uploads arrive shuffled; AirDrop renames).
     Returns (pairs [(front_index, back_index)], how): shooting order from the photos' capture times (else
     filenames), then neighbours paired; if the photos weren't shot card by card, fronts and backs are each kept
@@ -172,8 +183,14 @@ def pair_photos_info(named):
     ims = [_open(im) for _, im in named]
     times = [capture_time(im) for im in ims]
     timed = all(times) and len(set(times)) == len(times)
-    seq = sorted(range(len(named)), key=(lambda i: times[i]) if timed else (lambda i: _natural(named[i][0])))
-    src = "capture time" if timed else "file names (no capture time in the photos)"
+    src = "capture time"
+    if not timed and saved and all(saved) and len(set(saved)) == len(saved):   # when each was saved on the phone
+        times, timed, src = list(saved), True, "when the photos were saved on your phone"
+    by_name = not timed and numbered([n for n, _ in named])
+    seq = sorted(range(len(named)), key=(lambda i: times[i]) if timed else (lambda i: _natural(named[i][0])) if by_name
+                 else (lambda i: i))
+    src = src if timed else "file names (no capture time in the photos)" if by_name else \
+        "the order you picked them in (no capture time or numbered names)"
     if len(seq) < 2:
         return [], src
     scores, flags = back_scores([ims[i] for i in seq])

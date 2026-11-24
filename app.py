@@ -8,13 +8,14 @@ try:
 except Exception:
     pass  # no secrets file yet; pages show what's missing
 
-from core import db, deals  # noqa: E402
+from core import db, deals, labels  # noqa: E402
 from ui import common, deals_page, ev_page, inventory_page, list_page, prices_page, settings_page  # noqa: E402
 
 st.set_page_config(page_title="PokéProj", page_icon="🃏", layout="wide")
 st.logo(os.path.join(os.path.dirname(__file__), "ui", "logo.svg"), size="large")
 common.inject()
 st.cache_resource(deals.start_background)()   # one background deal scanner per server process
+st.cache_resource(labels.start_background)()  # emails an address label when something sells
 
 pages = {"list": st.Page(list_page.page, title="List cards", icon=":material/sell:", default=True),
          "prices": st.Page(prices_page.page, title="Card prices", icon=":material/monitoring:", url_path="prices"),

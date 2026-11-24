@@ -12,7 +12,7 @@ import pandas as pd
 import streamlit as st
 
 from core import catalog, db, ebay, inventory, listing, prices, sheet, vision
-from ui.common import (STATUS_KIND, cached_pairs, chip, data_uri, env_pills, esc, header, limits, money, photo, photo_order,
+from ui.common import (STATUS_KIND, cached_pairs, chip, data_uri, env_pills, esc, file_times, header, limits, money, photo, photo_order,
                        section, tiles, upload_thumb)
 
 UPLOADS = db.DATA / "uploads"
@@ -34,6 +34,18 @@ def page():
 
 
 # ---------------------------------------------------------------- 1. upload
+@st.cache_data(ttl=3600, show_spinner=False)
+def lan_ip():
+    """This PC's address on the home network (no traffic is sent: UDP connect only picks the route)."""
+    import socket
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+        try:
+            s.connect(("192.168.1.1", 1))
+            return s.getsockname()[0]
+        except OSError:
+            return "this-pc"
+
+
 def upload_panel():
     st.session_state.setdefault("up_n", 0)
     pre = st.session_state.get("prefill")          # set by 'List this card' on the Prices page
@@ -46,6 +58,9 @@ def upload_panel():
             if c2.button("Cancel", key="cancel_prefill"):
                 st.session_state.pop("prefill")
                 st.rerun()
+        st.caption(f"From your phone (same Wi-Fi): open **http://{lan_ip()}:8501** and upload there. Pick the photos "
+                   "in the order you took them (front, back, front, back…).")
+        saved_at = file_times(key=f"ft{st.session_state.up_n}")
         files = st.file_uploader("Front and back of each card, any order — backs are recognised automatically",
                                  type=["jpg", "jpeg", "png", "webp"], accept_multiple_files=True,
                                  key=f"up{st.session_state.up_n}")
@@ -69,7 +84,8 @@ def upload_panel():
         if not files:
             return
         ids = tuple(x.file_id for x in files)
-        idx, how = cached_pairs(ids, [(x.name, x.getvalue()) for x in files])
+        saved = [saved_at.get(f"{x.name}|{x.size}") for x in files]
+        idx, how = cached_pairs((ids, tuple(saved)), [(x.name, x.getvalue()) for x in files], saved)
         auto = [i for pair in idx for i in pair]
         if len(auto) != len(files):   # fronts and backs didn't come out even: the rest go last, for you to place
             st.warning("Couldn't find a back for every front. Arrange the photos below: each card is front, then back.")

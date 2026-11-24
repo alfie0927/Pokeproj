@@ -49,7 +49,12 @@ def main():
             totals["own"] = prices.sync_own_sales()
         except ebay.EbayError as e:
             print(f"own orders: {e}", file=sys.stderr)
-    from core import sheet
+    from core import labels, sheet
+    if db.setting("label_auto"):
+        try:
+            print(f"labels emailed: {labels.check()}", file=sys.stderr)
+        except Exception as e:
+            print(f"labels: {e}", file=sys.stderr)
     print(sheet.sync_quiet() or "spreadsheet sync off", file=sys.stderr)
     print(f"cards refreshed {totals.pop('cards')}/{len(plan)}"
           + (" (stopped at this job's share of the Browse budget; the rest go first tomorrow)" if totals.pop("stopped") else "")

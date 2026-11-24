@@ -3,7 +3,7 @@ import os
 
 import streamlit as st
 
-from core import db, ebay, prices, sheet, vision
+from core import db, ebay, labels, prices, sheet, vision
 from ui.common import env_pills, header, limits, money, section
 
 
@@ -146,6 +146,32 @@ def page():
                     st.success(sheet.sync())
                 except Exception as e:
                     st.error(f"Couldn't update the spreadsheet: {e}")
+    with st.container(border=True):
+        st.markdown("**Address labels**")
+        st.caption("When something sells on eBay, a label-sized PDF with the buyer's address (and your return "
+                   "address) is emailed to you within about 2 minutes. Print at actual size and add stamps. Sales from "
+                   "before you turn this on are skipped. Needs SMTP_USER and SMTP_PASSWORD in secrets.toml.")
+        if not (os.environ.get("SMTP_USER") and os.environ.get("SMTP_PASSWORD")):
+            st.warning("Email isn't set up yet: add SMTP_USER and SMTP_PASSWORD (a Gmail app password) to "
+                       ".streamlit/secrets.toml, then restart the app.")
+        last = db.setting("label_last")
+        if last:
+            st.caption(f"Last check {last['at'].replace('T', ' ')}: {last['msg']}")
+        l1, l2 = st.columns([2, 3])
+        on = l1.toggle("Email a label when something sells", bool(db.setting("label_auto")))
+        if on != bool(db.setting("label_auto")):
+            db.set_setting("label_auto", on)
+        ret = l2.text_input("Return address (one line, printed small at the top)", db.setting("return_address"))
+        if ret != db.setting("return_address"):
+            db.set_setting("return_address", ret.strip())
+        if l1.button("Email me a test label"):
+            try:
+                labels.send("Test label", "Print at actual size to check it fits your labels.",
+                            [("test label.pdf", labels.render(["A. Buyer", "1 Example Street", "Sample Town",
+                                                                "AB1 2CD"], ret.strip(), "eBay 000"))])
+                st.success("Test label sent.")
+            except Exception as e:
+                st.error(f"Couldn't send: {e}")
     section("eBay price data")
     c1, c2 = st.columns(2)
     with c1.container(border=True):
