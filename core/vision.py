@@ -72,8 +72,11 @@ def numbered(names):
 
 
 def _natural(name):
-    """'IMG_2.jpg' < 'IMG_10.jpg'."""
-    return [int(t) if t.isdigit() else t.lower() for t in re.split(r"(\d+)", name)]
+    """'IMG_2.jpg' < 'IMG_10.jpg'; 'x.jpeg' < 'x (1).jpeg' < 'x (2).jpeg' (WhatsApp/Windows copies of one second)."""
+    stem = os.path.splitext(os.path.basename(name))[0]
+    m = re.fullmatch(r"(.*?)\s*\((\d+)\)", stem)
+    stem, copy = (m.group(1), int(m.group(2))) if m else (stem, 0)
+    return [int(t) if t.isdigit() else t.lower() for t in re.split(r"(\d+)", stem)] + [copy]
 
 
 def capture_time(im):

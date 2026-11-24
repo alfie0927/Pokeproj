@@ -102,6 +102,11 @@ def upload_panel():
             orders[ids] = order = moved
         pairs = [(files[order[j]], files[order[j + 1]]) for j in range(0, len(order) - 1, 2)]
         manual = ids in orders
+        if not manual and how.startswith("the order you picked") and len(files) > 2:
+            st.warning("Your phone didn't send the order these photos were taken in (iPhone's photo picker removes "
+                       "the times and names and hands them over in its own order). Check the cards below, or for a "
+                       "reliable order: press Remove all, then add one card at a time (its front and back in one "
+                       "go). Each add keeps its place, and front/back within a card is sorted out automatically.")
         st.caption(("Your order (dragged). " if manual else f"Order from {how}. ")
                    + "Drag a photo onto another to swap them, or press ⇄ to swap a card's front and back.")
         b1, b2 = st.columns([3, 1])

@@ -531,6 +531,10 @@ def test_pair_photos():
     assert vision.pair_photos([("IMG_10", backs[0]), ("IMG_9", fronts[0])]) == [(1, 0)]
     assert vision.numbered(["IMG_4522.jpeg", "IMG_4521.jpeg"])
     assert vision.numbered(["IMG-20261123-WA0012.jpg", "IMG-20261123-WA0003.jpg"])
+    wa = ["WhatsApp Image 2026-11-24 at 08.31.45 (2).jpeg", "WhatsApp Image 2026-11-24 at 08.31.45.jpeg",
+          "WhatsApp Image 2026-11-24 at 08.31.46.jpeg", "WhatsApp Image 2026-11-24 at 08.31.45 (1).jpeg"]
+    assert vision.numbered(wa) and sorted(wa, key=vision._natural) == [wa[1], wa[3], wa[0], wa[2]]
+    assert not vision.numbered(["4f0515df-4e3d-4b43-ade5-1c77d1b096ff.jpeg", "dd1a68e0-235a-4a61-85ea-b396765ca4c4.jpeg"])
     assert not vision.numbered(["image.jpg", "image (1).jpg"]) and not vision.numbered(["image.jpg", "image.jpg"])
     assert not vision.numbered(["3F2A9C1E.jpeg", "photo.jpeg"]) and vision.numbered(["21_front.jpg", "21_back.jpg"])
 
