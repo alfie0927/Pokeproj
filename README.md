@@ -39,6 +39,17 @@ qualify (Settings until then). Every value says its basis, e.g. `sold ×7 (30 d,
 ```
 schtasks /create /sc daily /st 03:00 /tn PokeProjRefresh /tr "D:\pokeproj\.venv\Scripts\python.exe D:\pokeproj\refresh_daily.py"
 ```
+
+**Photos from your iPhone become drafts by themselves** (iCloud "pokemon" Shared Album → iCloud for Windows):
+`watch_photos.py` checks the album's folder every minute (Settings → Photo watcher shows the folder it found; set
+it there if it's elsewhere). Photos are paired front + back, read and priced like List cards, with the pricing and
+"Add to spreadsheet" choices you last used there; a photo whose partner hasn't synced yet waits. Each photo is
+imported once (by content), never twice. The first run only notes photos already in the album (run once with
+`--import-existing` to import those too). Log: `data/watch.log`; a Windows notification says "N new drafts".
+Start it at logon:
+```
+schtasks /create /sc onlogon /tn PokeProjWatchPhotos /tr "D:\pokeproj\.venv\Scripts\pythonw.exe D:\pokeproj\watch_photos.py"
+```
 The daily job refreshes followed cards highest priority first (watched/draft/deal → viewed → scanner-seen),
 2 Browse calls per card + 1 per ended listing, and stops at the daily budget (Settings, default 4,500 of eBay's
 5,000). Watched/draft/deal cards are also re-checked every 6 hours while the app is running. Cards unseen for 30

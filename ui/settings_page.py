@@ -147,6 +147,19 @@ def page():
                 except Exception as e:
                     st.error(f"Couldn't update the spreadsheet: {e}")
     with st.container(border=True):
+        st.markdown("**Photo watcher (iCloud shared album)**")
+        import watch_photos
+        found = watch_photos.find_folder()
+        st.caption("watch_photos.py turns photos added to your iCloud “pokemon” shared album into drafts every "
+                   "minute, using the pricing and spreadsheet choices from List cards (see README to start it at "
+                   f"logon). Folder: **{found or 'not found yet: install iCloud for Windows and turn on Shared Albums'}**.")
+        log = watch_photos.LOG
+        if log.exists():
+            st.caption("Last: " + (log.read_text(encoding="utf-8", errors="replace").strip().splitlines() or [""])[-1][:200])
+        wf = st.text_input("Album folder (blank = find the iCloud 'pokemon' folder)", db.setting("watch_folder"))
+        if wf != db.setting("watch_folder"):
+            db.set_setting("watch_folder", wf.strip().strip('"'))
+    with st.container(border=True):
         st.markdown("**Address labels**")
         st.caption("When something sells on eBay, a label-sized PDF with the buyer's address (and your return "
                    "address) is emailed to you within about 2 minutes. Print at actual size and add stamps. Sales from "

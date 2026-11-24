@@ -970,6 +970,50 @@ def test_slab_labels():
     assert vision.parse_label(L(("Pikachu", .3, .1), ("60", .7, .1))) is None
 
 
+def test_watch_no_duplicates():
+    """watch_photos: re-scanning (and restarting on) the same folder never makes a second draft of a photo; a photo
+    whose partner hasn't arrived waits instead of failing. Uses real photos from data/uploads when present."""
+    import shutil
+    import tempfile
+    import unittest.mock as um
+    from core import db
+    import watch_photos
+    up = db.DATA / "uploads"
+    src = [next(iter(up.glob(f"{i}_{s}.*")), up / "missing") for i, s in
+           ((21, "front"), (21, "back"), (22, "front"), (22, "back"), (23, "front"))]
+    if not all(p.exists() for p in src):
+        print("skip test_watch_no_duplicates: no sample photos in data/uploads")
+        return
+    tmp = Path(tempfile.mkdtemp())
+    old_db = db.DB
+    try:
+        db.DB, db._ready = tmp / "t.db", False
+        folder, out = tmp / "album", tmp / "uploads"
+        folder.mkdir()
+        out.mkdir()
+        for k, p in enumerate(src[:4]):
+            shutil.copy(p, folder / f"IMG_{100 + k}.jpeg")
+        stub = lambda fr, bk, s, p, c=None: {"title": f"card {Path(fr).name}", "candidates": []}
+        with um.patch.object(listing, "build_draft", stub), um.patch.object(listing, "UPLOADS", out):
+            w = watch_photos.Watcher(folder)
+            assert w.scan("market", 5, False) == []          # first look: sizes not settled yet
+            ids = w.scan("market", 5, False)
+            assert len(ids) == 2
+            assert w.scan("market", 5, False) == []          # same folder again: nothing new
+            w2 = watch_photos.Watcher(folder)                 # restarted watcher
+            w2.scan("market", 5, False)
+            assert w2.scan("market", 5, False) == []
+            shutil.copy(src[4], folder / "IMG_200.jpeg")      # a front whose back isn't here yet
+            w2.scan("market", 5, False)
+            assert w2.scan("market", 5, False) == []          # waits, not failed
+            assert db.q("SELECT COUNT(*) n FROM drafts")[0]["n"] == 2
+            assert db.q("SELECT COUNT(*) n FROM imported_photos")[0]["n"] == 4
+            assert {r["status"] for r in db.q("SELECT status FROM drafts")} == {"draft"}
+    finally:
+        db.DB, db._ready = old_db, False
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

@@ -1,22 +1,19 @@
 """List cards: upload photos -> review grid (condition, price, accept in one place) -> post, then live listings."""
 import datetime
-import io
 import json
-import os
 import re
 import string
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import pandas as pd
 import streamlit as st
 
-from core import catalog, db, ebay, inventory, listing, prices, sheet, vision
+from core import catalog, db, ebay, listing, prices, sheet, vision
 from ui.common import (STATUS_KIND, cached_pairs, chip, data_uri, env_pills, esc, header, limits, money, photo, photo_order,
                        section, tiles, upload_thumb)
 
-UPLOADS = db.DATA / "uploads"
+UPLOADS = listing.UPLOADS
 CONDITIONS = ["NM", "LP", "MP", "HP"]
 
 
@@ -122,41 +119,10 @@ def upload_panel():
 
 
 def process(pairs, strategy, pct, card=None, to_sheet=False):
-    UPLOADS.mkdir(parents=True, exist_ok=True)
-    jobs = []
-    for f, b in pairs:
-        did = listing.save_new("", "")
-        paths = []
-        for side, up in (("front", f), ("back", b)):
-            ext = os.path.splitext(up.name)[1].lower()
-            if ext in (".heic", ".heif"):   # iPhone format: eBay and the card reader want JPEG
-                p = UPLOADS / f"{did}_{side}.jpg"
-                im = vision.Image.open(io.BytesIO(up.getvalue()))
-                im.convert("RGB").save(p, "JPEG", quality=95, exif=im.getexif())
-            else:
-                p = UPLOADS / f"{did}_{side}{ext}"
-                p.write_bytes(up.getvalue())
-            paths.append(p)
-        db.run("UPDATE drafts SET front_path=?, back_path=? WHERE id=?", (str(paths[0]), str(paths[1]), did))
-        jobs.append((did, *paths))
     inv_id = (st.session_state.get("prefill") or {}).get("inventory_id")   # listing a card from Inventory
-    bar, done = st.progress(0.0, "Identifying cards…"), {"ok": 0, "pick": 0, "fail": 0}
-    with ThreadPoolExecutor(4) as ex:
-        futs = {ex.submit(listing.build_draft, fr, bk, strategy, pct, card): did for did, fr, bk in jobs}
-        for i, fut in enumerate(as_completed(futs)):
-            did = futs[fut]
-            try:
-                d = fut.result()
-                d["to_sheet"] = to_sheet
-                if inv_id:
-                    d["inventory_id"] = inv_id
-                    inventory.set_listed(inv_id, did)
-                listing.save(did, d, "draft")
-                done["pick" if len(d.get("candidates") or []) > 1 else "ok"] += 1
-            except Exception as e:
-                db.run("UPDATE drafts SET status='failed', error=? WHERE id=?", (f"Processing failed: {e}", did))
-                done["fail"] += 1
-            bar.progress((i + 1) / len(jobs), f"{i + 1}/{len(jobs)} done")
+    bar = st.progress(0.0, "Identifying cards…")
+    done, _ = listing.import_pairs([((f.name, f.getvalue()), (b.name, b.getvalue())) for f, b in pairs], strategy, pct,
+                                   to_sheet, card, inv_id, lambda i, n: bar.progress(i / n, f"{i}/{n} done"))
     st.session_state.process_summary = done
     st.session_state.up_n += 1                       # fresh, empty uploader
     st.session_state.pop("prefill", None)
@@ -279,7 +245,7 @@ def draft_details(r, d):
     checks = [w.replace("photo pairing (not checked by OCR), ", "").replace("photo pairing (not checked by OCR)", "")
               for w in d.get("warnings", []) + d.get("errors", [])]
     checks = [w for w in checks if w.strip().rstrip(":") != "Uncertain"]
-    with st.expander(f"#{did} · {d['title']}" + (f"  ·  ⚠ {len(checks)}" if checks else "")):
+    with st.expander(f"#{did} · {d['title']}" + (f"  ·  ⚠ {len(checks)}" if checks else ""), expanded=True):
         st.html(f'<div class="pp-head">{chip(r["status"], kind)}<span class="pp-muted">Market '
                 f'{esc(money(d.get("market")))} ({esc((d.get("market_basis") or "no data").split("· ")[-1])})'
                 + (f' · cheapest same condition {esc(money(d["lowest"]["total"]))}' if d.get("lowest") else "")

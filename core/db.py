@@ -30,6 +30,8 @@ CREATE TABLE IF NOT EXISTS drafts (
   id INTEGER PRIMARY KEY, front_path TEXT, back_path TEXT, status TEXT,
   data_json TEXT, listing_id TEXT, error TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT);
+CREATE TABLE IF NOT EXISTS imported_photos (
+  sha1 TEXT PRIMARY KEY, filename TEXT, size INTEGER, mtime REAL, draft_id INTEGER, imported_at TEXT);
 CREATE TABLE IF NOT EXISTS watch (card_key TEXT PRIMARY KEY, lang TEXT, card_id TEXT, name TEXT, added_at TEXT);
 CREATE TABLE IF NOT EXISTS cards_seen (
   card_key TEXT PRIMARY KEY, lang TEXT, card_id TEXT, name TEXT, set_name TEXT, image TEXT, rarity TEXT,
@@ -102,7 +104,8 @@ DEFAULTS = {
     "bo_accept_pct": 92.0,         # ...accept offers at or above this % of your price
     "bo_decline_pct": 80.0,        # ...decline offers under this %; in between you decide in Seller Hub
     "stale_days": 14,              # Live on eBay: flag listings unsold after this many days
-    "sheet_auto": True, "sheet_add": False, "label_auto": False, "return_address": "",            # update the Excel workbook after posting, price pushes and sales
+    "sheet_auto": True, "sheet_add": False, "label_auto": False, "return_address": "",
+    "watch_folder": "",                # iCloud shared album folder for watch_photos.py (blank = find it)            # update the Excel workbook after posting, price pushes and sales
     "sheet_path": "",              # "" = the .xlsm in the project folder
     "ebay_username": "",
     "fulfillment_policy": "", "payment_policy": "", "return_policy": "",

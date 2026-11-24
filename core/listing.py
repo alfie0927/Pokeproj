@@ -191,6 +191,65 @@ def apply_grid_row(d, title, condition, price, strategy, pct):
     return d
 
 
+UPLOADS = db.DATA / "uploads"
+
+
+def _store(did, side, src):
+    """Copy one photo into UPLOADS as {did}_{side}.ext. src: a file path, or (filename, bytes) from the uploader.
+    iPhone HEIC/HEIF becomes JPEG (eBay and the card reader want JPEG), keeping its EXIF (capture time)."""
+    import io
+    name, data = (src, Path(src).read_bytes()) if isinstance(src, (str, Path)) else src
+    ext = Path(str(name)).suffix.lower()
+    if ext in (".heic", ".heif"):
+        p = UPLOADS / f"{did}_{side}.jpg"
+        im = vision.Image.open(io.BytesIO(data))
+        im.convert("RGB").save(p, "JPEG", quality=95, exif=im.getexif())
+    else:
+        p = UPLOADS / f"{did}_{side}{ext}"
+        p.write_bytes(data)
+    return p
+
+
+def import_pairs(pairs, strategy, pct, to_sheet=False, card=None, inventory_id=None, progress=None):
+    """Photos -> drafts, the same for the List page and watch_photos.py. pairs: [(front, back)], each a file path
+    or (filename, bytes). Saves the photos, reads + prices each card (4 at a time) and stores it as 'draft', or
+    'failed' with the error. progress(done, total) after each card. Returns ({"ok", "pick", "fail"}, [draft ids])."""
+    UPLOADS.mkdir(parents=True, exist_ok=True)
+    jobs = []
+    for f, b in pairs:
+        did = save_new("", "")
+        try:
+            paths = [_store(did, side, src) for side, src in (("front", f), ("back", b))]
+        except Exception as e:
+            db.run("UPDATE drafts SET status='failed', error=? WHERE id=?", (f"Couldn't save the photos: {e}", did))
+            jobs.append((did, None, None))
+            continue
+        db.run("UPDATE drafts SET front_path=?, back_path=? WHERE id=?", (str(paths[0]), str(paths[1]), did))
+        jobs.append((did, *paths))
+    done = {"ok": 0, "pick": 0, "fail": sum(fr is None for _, fr, _ in jobs)}
+    todo = [j for j in jobs if j[1] is not None]
+    from concurrent.futures import as_completed
+    with ThreadPoolExecutor(4) as ex:
+        futs = {ex.submit(build_draft, fr, bk, strategy, pct, card): did for did, fr, bk in todo}
+        for i, fut in enumerate(as_completed(futs)):
+            did = futs[fut]
+            try:
+                d = fut.result()
+                d["to_sheet"] = bool(to_sheet)
+                if inventory_id:
+                    from . import inventory
+                    d["inventory_id"] = inventory_id
+                    inventory.set_listed(inventory_id, did)
+                save(did, d, "draft")
+                done["pick" if len(d.get("candidates") or []) > 1 else "ok"] += 1
+            except Exception as e:
+                db.run("UPDATE drafts SET status='failed', error=? WHERE id=?", (f"Processing failed: {e}", did))
+                done["fail"] += 1
+            if progress:
+                progress(i + 1, len(todo))
+    return done, [did for did, _, _ in jobs]
+
+
 def save_new(front, back):
     return db.run("INSERT INTO drafts (front_path, back_path, status, data_json) VALUES (?,?,'processing','{}')",
                   (str(front), str(back)))
