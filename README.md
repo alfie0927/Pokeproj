@@ -58,7 +58,8 @@ draft (defaults to NM). Tips: photograph straight-on, in focus, with the bottom 
 `VISION_BACKEND = "claude"` + `ANTHROPIC_API_KEY`: Claude identifies and grades condition (~3–6p per card).
 
 ## Setup
-1. `python -m venv .venv` then `.venv\Scripts\pip install streamlit anthropic rapidocr onnxruntime`
+1. `python -m venv .venv` then `.venv\Scripts\pip install streamlit anthropic rapidocr onnxruntime pillow-heif`
+   (pillow-heif reads iPhone HEIC photos)
 2. Copy `.streamlit/secrets.toml.example` → `.streamlit/secrets.toml` and fill it in.
    eBay: free developer account at developer.ebay.com → create Production and Sandbox keysets → User Tokens
    (OAuth, scopes `sell.inventory`, `sell.account`, `sell.fulfillment`). Production keys also need the marketplace

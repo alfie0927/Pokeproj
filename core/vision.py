@@ -8,6 +8,12 @@ from functools import lru_cache
 from typing import Literal, Optional
 
 from PIL import Image, ImageOps
+
+try:   # iPhone photos are HEIC: let PIL open them everywhere (pip install pillow-heif)
+    import pillow_heif
+    pillow_heif.register_heif_opener()
+except ImportError:
+    pass
 from pydantic import BaseModel
 
 MODEL = "claude-opus-5-5"

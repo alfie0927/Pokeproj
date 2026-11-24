@@ -1,5 +1,6 @@
 """List cards: upload photos -> review grid (condition, price, accept in one place) -> post, then live listings."""
 import datetime
+import io
 import json
 import os
 import re
@@ -62,7 +63,7 @@ def upload_panel():
                    "in the order you took them (front, back, front, back…).")
         saved_at = file_times(key=f"ft{st.session_state.up_n}")
         files = st.file_uploader("Front and back of each card, any order — backs are recognised automatically",
-                                 type=["jpg", "jpeg", "png", "webp"], accept_multiple_files=True,
+                                 type=["jpg", "jpeg", "png", "webp", "heic", "heif"], accept_multiple_files=True,
                                  key=f"up{st.session_state.up_n}")
         c1, c2 = st.columns([3, 1])
         strategies = {"lowest": "X% below cheapest same-condition listing (sells fastest)",
@@ -114,8 +115,14 @@ def process(pairs, strategy, pct, card=None, to_sheet=False):
         did = listing.save_new("", "")
         paths = []
         for side, up in (("front", f), ("back", b)):
-            p = UPLOADS / f"{did}_{side}{os.path.splitext(up.name)[1].lower()}"
-            p.write_bytes(up.getvalue())
+            ext = os.path.splitext(up.name)[1].lower()
+            if ext in (".heic", ".heif"):   # iPhone format: eBay and the card reader want JPEG
+                p = UPLOADS / f"{did}_{side}.jpg"
+                im = vision.Image.open(io.BytesIO(up.getvalue()))
+                im.convert("RGB").save(p, "JPEG", quality=95, exif=im.getexif())
+            else:
+                p = UPLOADS / f"{did}_{side}{ext}"
+                p.write_bytes(up.getvalue())
             paths.append(p)
         db.run("UPDATE drafts SET front_path=?, back_path=? WHERE id=?", (str(paths[0]), str(paths[1]), did))
         jobs.append((did, *paths))
