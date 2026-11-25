@@ -34,14 +34,14 @@ def find_folder():
     if db.setting("watch_folder"):
         return Path(db.setting("watch_folder"))
     home = Path(os.environ.get("USERPROFILE", Path.home()))
-    if (home / "iCloudDrive" / "pokemon").is_dir():   # an iCloud Drive folder (Files app on the phone)
-        return home / "iCloudDrive" / "pokemon"
-    for root in (home / "Pictures" / "iCloud Photos", home / "OneDrive" / "Pictures" / "iCloud Photos",
-                 home / "iCloud Photos", home / "iCloudPhotos", home / "iCloud Photos (2)"):
+    for root in (home / "iCloudPhotos", home / "Pictures" / "iCloud Photos", home / "OneDrive" / "Pictures" / "iCloud Photos",
+                 home / "iCloud Photos", home / "iCloud Photos (2)"):   # the 'pokemon' Shared Album, once synced
         if root.is_dir():
             hit = next((p for p in root.rglob("*") if p.is_dir() and p.name.lower() == "pokemon"), None)
             if hit:
                 return hit
+    if (home / "iCloudDrive" / "pokemon").is_dir():   # else the iCloud Drive folder (Files app on the phone)
+        return home / "iCloudDrive" / "pokemon"
     return None
 
 
@@ -58,6 +58,7 @@ class Watcher:
 
     def __init__(self, folder):
         self.folder, self.sizes, self.first_ready, self.hashes, self.scans = Path(folder), {}, {}, {}, 0
+        self.undeletable = set()
 
     def ready(self):
         """Photo files whose size is the same as at the previous scan."""
@@ -73,15 +74,31 @@ class Watcher:
         return out
 
     def new(self, files):
-        """Ready files whose content isn't in imported_photos yet: [(path, size, mtime, sha1)]."""
-        known = {r["sha1"] for r in db.q("SELECT sha1 FROM imported_photos")}
-        out, seen = [], set()
+        """Ready files whose content isn't in imported_photos yet: [(path, size, mtime, sha1)]. Files that already
+        became a draft are deleted from the folder (the draft keeps its own copy in data/uploads)."""
+        known = {r["sha1"]: r["draft_id"] for r in db.q("SELECT sha1, draft_id FROM imported_photos")}
+        out, seen, gone = [], set(), 0
         for p, size, mtime in files:
             key = (p, size, mtime)
             sha = self.hashes.get(key) or self.hashes.setdefault(key, _sha1(p))
-            if sha not in known and sha not in seen:   # the same photo twice in the album: once
+            if known.get(sha):
+                if sha not in self.undeletable:
+                    try:
+                        p.unlink()
+                        gone += 1
+                    except OSError as e:
+                        if getattr(e, "winerror", None) == 379:   # iCloud Shared Albums can't be deleted from Windows
+                            self.undeletable.add(sha)
+                            if len(self.undeletable) == 1:
+                                log.info("this folder doesn't allow deleting (iCloud Shared Album): photos stay; "
+                                         "delete them in the album on your phone, or use the iCloud Drive folder")
+                        else:   # busy (still syncing): next scan
+                            log.warning("couldn't delete %s yet: %s", p.name, e)
+            elif sha not in known and sha not in seen:   # the same photo twice in the album: once
                 seen.add(sha)
                 out.append((p, size, mtime, sha))
+        if gone:
+            log.info("deleted %d photo(s) from the folder that are already drafts", gone)
         return out
 
     def scan(self, strategy=None, pct=None, to_sheet=None, seed=False):
@@ -106,6 +123,15 @@ class Watcher:
                 for (f, b), did in zip(pairs, ids) for i in (f, b)]
         db.many(rec, rows)
         for f, b in pairs:
+            for i in (f, b):
+                if any(new[i][3] == r[0] for r in rows if r[4]):   # became a draft: remove it from the folder
+                    try:
+                        new[i][0].unlink()
+                    except OSError as e:
+                        if getattr(e, "winerror", None) == 379:
+                            self.undeletable.add(new[i][3])
+                        else:
+                            log.warning("couldn't delete %s yet: %s", new[i][0].name, e)
             self.first_ready.pop(new[f][3], None)
             self.first_ready.pop(new[b][3], None)
         log.info("%d new draft(s) from %d photo(s): %s; %d photo(s) waiting for a partner",

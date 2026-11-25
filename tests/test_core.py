@@ -999,13 +999,18 @@ def test_watch_no_duplicates():
             assert w.scan("market", 5, False) == []          # first look: sizes not settled yet
             ids = w.scan("market", 5, False)
             assert len(ids) == 2
+            assert not list(folder.iterdir())                 # drafts made: photos removed from the folder
+            for k, p in enumerate(src[:4]):                   # iCloud puts them back: still no new drafts
+                shutil.copy(p, folder / f"IMG_{100 + k}.jpeg")
             assert w.scan("market", 5, False) == []          # same folder again: nothing new
             w2 = watch_photos.Watcher(folder)                 # restarted watcher
             w2.scan("market", 5, False)
             assert w2.scan("market", 5, False) == []
+            assert not list(folder.iterdir())                 # ...and they're removed again
             shutil.copy(src[4], folder / "IMG_200.jpeg")      # a front whose back isn't here yet
             w2.scan("market", 5, False)
             assert w2.scan("market", 5, False) == []          # waits, not failed
+            assert (folder / "IMG_200.jpeg").exists()         # and isn't deleted while it waits
             assert db.q("SELECT COUNT(*) n FROM drafts")[0]["n"] == 2
             assert db.q("SELECT COUNT(*) n FROM imported_photos")[0]["n"] == 4
             assert {r["status"] for r in db.q("SELECT status FROM drafts")} == {"draft"}
