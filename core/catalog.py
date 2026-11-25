@@ -133,8 +133,12 @@ def image(c, quality="high"):
 
 
 def printed_number(c):
-    """'199/165' for numbered cards, else the raw localId (TG05, SVP 123...)."""
-    local, total = c["localId"], (c.get("set") or {}).get("cardCount", {}).get("official")
+    """'199/165' for numbered cards, else the raw localId (TG05, SVP 123...). Promo cards print no set total
+    (Black Star Promos: '173', not '173/225', the promo set's card count)."""
+    s = c.get("set") or {}
+    local, total = c["localId"], s.get("cardCount", {}).get("official")
+    if re.search(r"promo|プロモ", s.get("name") or "", re.I):
+        return local
     # ponytail: uses the printed padding ('025/165'); sellers who write '25/165' are missed
     return f"{local}/{total}" if local.isdigit() and total else local
 

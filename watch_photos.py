@@ -34,6 +34,8 @@ def find_folder():
     if db.setting("watch_folder"):
         return Path(db.setting("watch_folder"))
     home = Path(os.environ.get("USERPROFILE", Path.home()))
+    if (home / "iCloudDrive" / "pokemon").is_dir():   # an iCloud Drive folder (Files app on the phone)
+        return home / "iCloudDrive" / "pokemon"
     for root in (home / "Pictures" / "iCloud Photos", home / "OneDrive" / "Pictures" / "iCloud Photos",
                  home / "iCloud Photos", home / "iCloudPhotos", home / "iCloud Photos (2)"):
         if root.is_dir():

@@ -9,3 +9,5 @@ data/uploads/
 *.xls*
 ~$*
 data/sheet_backups/
+
+data/watch.log

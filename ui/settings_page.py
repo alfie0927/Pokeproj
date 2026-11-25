@@ -147,7 +147,7 @@ def page():
                 except Exception as e:
                     st.error(f"Couldn't update the spreadsheet: {e}")
     with st.container(border=True):
-        st.markdown("**Photo watcher (iCloud shared album)**")
+        st.markdown("**Photo watcher (iCloud 'pokemon' folder)**")
         import watch_photos
         found = watch_photos.find_folder()
         st.caption("watch_photos.py turns photos added to your iCloud “pokemon” shared album into drafts every "
