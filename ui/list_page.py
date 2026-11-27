@@ -216,6 +216,7 @@ def review():
     b1, b2, b3 = st.columns([1.3, 1.3, 3])
     if b1.button(f"Save {len(changed)} change(s)", type="primary", disabled=not changed):
         save_grid(changed)
+        st.rerun()
     pending = [r["id"] for r, d in zip(rows, data) if r["status"] == "draft" and (d.get("price") or 0) > 0]
     if b2.button(f"Accept all {len(pending)}", disabled=not pending):
         for did in pending:
@@ -225,7 +226,7 @@ def review():
                "exactly what goes on eBay; changing only the condition re-prices automatically.")
     for r, d in zip(rows, data):
         draft_details(r, d)
-    post_bar()
+    post_bar(changed)
 
 
 def save_grid(changed):
@@ -236,7 +237,17 @@ def save_grid(changed):
         d["to_sheet"] = bool(e["Sheet"])
         listing.save(r["id"], d, "accepted" if e["Accept"] else ("draft" if r["status"] == "accepted" else r["status"]))
     st.toast(f"Saved {len(changed)} draft(s)")
-    st.rerun()
+
+
+def priced_drafts():
+    """Ids of drafts still to accept that have a price (a £0 draft can't go on eBay)."""
+    return [r["id"] for r in db.q("SELECT id, data_json FROM drafts WHERE status='draft'")
+            if (json.loads(r["data_json"] or "{}").get("price") or 0) > 0]
+
+
+def ready_to_post():
+    return [r["id"] for r in db.q("SELECT id FROM drafts WHERE status='accepted' OR "
+                                  "(status='failed' AND data_json NOT IN ('', '{}'))")]
 
 
 def draft_details(r, d):
@@ -311,14 +322,23 @@ def draft_details(r, d):
 
 
 # ---------------------------------------------------------------- 3. post
-def post_bar():
-    accepted = [r["id"] for r in db.q("SELECT id FROM drafts WHERE status='accepted' OR "
-                                      "(status='failed' AND data_json NOT IN ('', '{}'))")]
+def post_bar(changed=()):
+    accepted = ready_to_post()
+    n_all = len(accepted) + len(priced_drafts())
     section("3 · Post to eBay")
     lim = limits()
     blocked = lim is not None and lim.get("items_left") == 0
-    c1, c2 = st.columns([1.3, 4])
+    c1, c3, c2 = st.columns([1.3, 1.8, 3])
     go = c1.button(f"Post {len(accepted)} accepted", type="primary", disabled=not accepted or blocked)
+    go_all = c3.button(f"Save, accept all & post {n_all}", disabled=not (n_all or changed) or blocked,
+                       help="Saves your table edits, accepts every draft that has a price, then posts them all. "
+                            "Drafts priced £0 are left as drafts.")
+    if go_all:
+        if changed:
+            save_grid(changed)
+        for did in priced_drafts():
+            db.run("UPDATE drafts SET status='accepted' WHERE id=?", (did,))
+        accepted, go = ready_to_post(), True
     if blocked:
         c2.warning("eBay's monthly selling limit is used up (0 listings left), so eBay would refuse new listings. "
                    "Drafts stay saved: post them when your limit resets.")
