@@ -403,6 +403,61 @@ def watcher_offers(send=False, pct=None):
     return plan, sent, errors
 
 
+THANKS_SUBJECT = "Thanks for your order!"
+THANKS = ("Hi {name},\n\nThanks so much for buying {what} from us! We hope it arrived safely and you're happy with it.\n\n"
+          "If you have a moment and haven't already, we'd really appreciate it if you could leave us feedback. It makes "
+          "a big difference to a small seller. And if anything isn't right, just message us and we'll sort it out.\n\n"
+          "Thanks again!")
+
+
+def thank_plan(orders, done_orders, recent_buyers, now, days, max_days=30):
+    """Pure. One thank-you per buyer for paid, uncancelled orders bought between `days` and `max_days` days ago that
+    weren't thanked yet; buyers thanked in the last 30 days (recent_buyers) are skipped.
+    -> [{'order_ids', 'item_id', 'buyer', 'subject', 'body'}]"""
+    by = {}
+    for o in orders:
+        bought = datetime.datetime.fromisoformat(o["creationDate"].replace("Z", "+00:00"))
+        buyer, items = (o.get("buyer") or {}).get("username"), o.get("lineItems") or []
+        if (o["orderId"] in done_orders or buyer in recent_buyers or not buyer or not items
+                or not days <= (now - bought).days <= max_days or o.get("orderPaymentStatus") != "PAID"
+                or (o.get("cancelStatus") or {}).get("cancelState") not in (None, "NONE_REQUESTED")):
+            continue
+        ship = ((o.get("fulfillmentStartInstructions") or [{}])[0].get("shippingStep") or {}).get("shipTo") or {}
+        p = by.setdefault(buyer, {"order_ids": [], "item_id": items[0].get("legacyItemId"), "buyer": buyer,
+                                  "name": (ship.get("fullName") or "").split(" ")[0].capitalize() or "there",
+                                  "titles": []})
+        p["order_ids"].append(o["orderId"])
+        p["titles"] += [li.get("title") or "" for li in items]
+    out = []
+    for p in by.values():
+        t = p.pop("titles")
+        what = "the " + re.sub(r"\s*\b(?:NM|LP|MP|HP)?\s*Pokemon Card$", "", t[0], flags=re.I) if len(t) == 1 \
+            else f"your {len(t)} cards"
+        out.append({**p, "subject": THANKS_SUBJECT, "body": THANKS.format(name=p.pop("name"), what=what)})
+    return out
+
+
+def thank_buyers(send=False):
+    """Plan (and with send=True, send) thank-you + feedback-request messages a few days after each purchase
+    (Settings: thank_after_days). Each order is messaged at most once. Returns (plan, sent, errors)."""
+    now = datetime.datetime.now(datetime.timezone.utc)
+    done = {r["order_id"] for r in db.q("SELECT order_id FROM thanked")}
+    recent = {r["buyer"] for r in db.q("SELECT buyer FROM thanked WHERE at >= ?",
+                                       ((now - datetime.timedelta(days=30)).isoformat(),))}
+    orders = ebay.orders((now - datetime.timedelta(days=31)).strftime("%Y-%m-%dT%H:%M:%S.000Z"))
+    plan = thank_plan(orders, done, recent, now, int(db.setting("thank_after_days")))
+    sent, errors = 0, []
+    for p in (plan if send else []):
+        try:
+            ebay.send_buyer_message(p["item_id"], p["buyer"], p["subject"], p["body"])
+        except Exception as e:
+            errors.append(f"{p['buyer']}: {e}")
+            continue
+        db.many("INSERT OR IGNORE INTO thanked VALUES (?,?,?)", [(o, p["buyer"], now.isoformat()) for o in p["order_ids"]])
+        sent += 1
+    return plan, sent, errors
+
+
 def update_live_price(draft_id, price):
     """Set the price on the live eBay listing, then record it (only after eBay accepted it)."""
     d = json.loads(db.q("SELECT data_json FROM drafts WHERE id=?", (draft_id,))[0]["data_json"])

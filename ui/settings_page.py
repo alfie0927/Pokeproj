@@ -163,6 +163,15 @@ def page():
                               "listing). Off: you press Send on List cards.")
         if auto != bool(db.setting("watcher_offers_auto")):
             db.set_setting("watcher_offers_auto", auto)
+        t1, t2 = st.columns(2)
+        thank = t1.toggle("Thank buyers & ask for feedback", bool(db.setting("thank_buyers_auto")),
+                          help="The daily refresh sends each buyer one eBay message: thanks for buying, please leave "
+                               "feedback if you haven't. Once per order; a buyer is messaged at most once a month.")
+        if thank != bool(db.setting("thank_buyers_auto")):
+            db.set_setting("thank_buyers_auto", thank)
+        days = t2.number_input("…days after they buy", 1, 25, int(db.setting("thank_after_days")), 1, key="set_thank_days")
+        if days != int(db.setting("thank_after_days")):
+            db.set_setting("thank_after_days", days)
         b, m = float(db.setting("buy_pct")), float(db.setting("min_profit_pct"))
         st.caption(f"Floor now: **{b:g} % of market + {m:g} % = {b * (1 + m / 100):.0f} % of market** "
                    "for cards without a recorded cost.")

@@ -53,6 +53,7 @@ CREATE TABLE IF NOT EXISTS auctions (
   item_id TEXT PRIMARY KEY, found_at TEXT, card_key TEXT, name TEXT, set_name TEXT, number TEXT, bucket TEXT,
   rarity TEXT, era TEXT, title TEXT, bid REAL, bids INTEGER, postage REAL, market REAL, basis TEXT, ratio REAL,
   max_bid REAL, image TEXT, url TEXT, end_at TEXT, location TEXT, status TEXT DEFAULT 'new');
+CREATE TABLE IF NOT EXISTS thanked (order_id TEXT PRIMARY KEY, buyer TEXT, at TEXT);
 CREATE TABLE IF NOT EXISTS inventory (
   id INTEGER PRIMARY KEY, card_key TEXT, name TEXT, set_name TEXT, number TEXT, bucket TEXT, image TEXT,
   source_url TEXT, cost REAL, bought_at TEXT, status TEXT DEFAULT 'owned', draft_id INTEGER, sold_price REAL,
@@ -107,7 +108,9 @@ DEFAULTS = {
     "best_offer": True,           # new listings accept offers; eBay answers them automatically (below)
     "bo_accept_pct": 92.0,         # ...accept offers at or above this % of your price
     "bo_decline_pct": 80.0,        # ...decline offers under this %; in between you decide in Seller Hub
-    "stale_days": 14,              # Live on eBay: flag listings unsold after this many days
+    "thank_buyers_auto": True,     # daily job messages each buyer: thanks + please leave feedback
+    "thank_after_days": 4,         # ...this many days after they bought
+    "stale_days": 14,             # Live on eBay: flag listings unsold after this many days
     "sheet_auto": True, "sheet_add": False, "label_auto": False, "return_address": "",
     "watch_folder": "",                # iCloud shared album folder for watch_photos.py (blank = find it)            # update the Excel workbook after posting, price pushes and sales
     "sheet_path": "",              # "" = the .xlsm in the project folder

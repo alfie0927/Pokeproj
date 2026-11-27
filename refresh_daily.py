@@ -56,6 +56,12 @@ def main():
             print(f"watcher offers sent: {sent}" + (f"; errors: {errs}" if errs else ""), file=sys.stderr)
         except Exception as e:
             print(f"watcher offers: {e}", file=sys.stderr)
+    if db.setting("thank_buyers_auto") and os.environ.get("EBAY_REFRESH_TOKEN"):
+        try:
+            _, sent, errs = listing.thank_buyers(send=True)
+            print(f"buyers thanked: {sent}" + (f"; errors: {errs}" if errs else ""), file=sys.stderr)
+        except Exception as e:
+            print(f"thank buyers: {e}", file=sys.stderr)
     if db.setting("label_auto"):
         try:
             print(f"labels emailed: {labels.check()}", file=sys.stderr)

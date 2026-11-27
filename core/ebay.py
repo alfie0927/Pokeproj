@@ -480,6 +480,22 @@ def send_watcher_offer(listing_id, pct):
         "offeredItems": [{"listingId": str(listing_id), "discountPercentage": f"{pct:g}", "quantity": 1}]}).json()
 
 
+def send_buyer_message(item_id, buyer, subject, body):
+    """Message a buyer about an item they bought from you (Trading API AddMemberMessageAAQToPartner).
+    Outward-facing: lands in the buyer's eBay inbox. POST is never retried, so it can't send twice."""
+    from xml.sax.saxutils import escape
+    xml = ('<?xml version="1.0" encoding="utf-8"?>'
+           '<AddMemberMessageAAQToPartnerRequest xmlns="urn:ebay:apis:eBLBaseComponents">'
+           f"<ItemID>{int(item_id)}</ItemID><MemberMessage><Subject>{escape(subject[:80])}</Subject>"
+           f"<Body>{escape(body[:2000])}</Body><QuestionType>General</QuestionType>"
+           f"<RecipientID>{escape(buyer)}</RecipientID></MemberMessage></AddMemberMessageAAQToPartnerRequest>")
+    r = _http.post(hosts()[0] + "/ws/api.dll", data=xml.encode(), timeout=30, headers={
+        "X-EBAY-API-CALL-NAME": "AddMemberMessageAAQToPartner", "X-EBAY-API-SITEID": "3",
+        "X-EBAY-API-COMPATIBILITY-LEVEL": "1225", "X-EBAY-API-IAF-TOKEN": _token("user"), "Content-Type": "text/xml"})
+    if xml_first(r.text, "Ack") not in ("Success", "Warning"):
+        raise EbayError(f"Message to {buyer}: {xml_first(r.text, 'LongMessage') or r.text[:300]}")
+
+
 def set_price(sku, price, floor=None):
     """Change a live listing's price. Updates the listing and the Inventory API offer together."""
     offers = call("GET", "/sell/inventory/v1/offer", params={"sku": sku, "marketplace_id": MARKET}).json().get("offers", [])

@@ -1062,6 +1062,26 @@ def test_profit_floor():
     assert not by[4]["send"] and "no market" in by[4]["why"]
 
 
+def test_thank_plan():
+    from datetime import datetime, timezone
+    now = datetime(2026, 11, 27, 12, tzinfo=timezone.utc)
+    o = lambda oid, buyer, day, title="Charizard ex 183/165 151 Ultra Rare NM Pokemon Card", pay="PAID", cancel=None: {
+        "orderId": oid, "creationDate": f"2026-11-{day:02d}T10:00:00.000Z", "orderPaymentStatus": pay,
+        "cancelStatus": {"cancelState": cancel} if cancel else {}, "buyer": {"username": buyer},
+        "lineItems": [{"legacyItemId": "123", "title": title}],
+        "fulfillmentStartInstructions": [{"shippingStep": {"shipTo": {"fullName": "JANE DOE"}}}]}
+    orders = [o("1", "jane", 20), o("2", "jane", 21, "Pikachu 25/102 PSA 10 Pokemon Card"),   # same buyer: one message
+              o("3", "new", 26),                                       # bought yesterday: too soon
+              o("4", "refund", 20, pay="FULLY_REFUNDED"), o("5", "cxl", 20, cancel="CANCELED"),
+              o("6", "done", 20), o("7", "recent", 20), o("8", "old", 1, title="x")]   # 26 days: still in window
+    plan = listing.thank_plan(orders, {"6"}, {"recent"}, now, 4)
+    assert [(p["buyer"], p["order_ids"]) for p in plan] == [("jane", ["1", "2"]), ("old", ["8"])]
+    assert plan[0]["body"].startswith("Hi Jane,") and "your 2 cards" in plan[0]["body"]
+    one = listing.thank_plan([o("1", "jane", 20)], set(), set(), now, 4)[0]["body"]
+    assert "buying the Charizard ex 183/165 151 Ultra Rare from us" in one and "feedback" in one
+    assert listing.thank_plan([o("9", "x", 1)], set(), set(), datetime(2026, 12, 15, tzinfo=timezone.utc), 4) == []
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):
