@@ -159,8 +159,8 @@ def page():
             if v != float(db.setting(key)):
                 db.set_setting(key, v)
         auto = f4.toggle("Send watcher offers daily", bool(db.setting("watcher_offers_auto")),
-                         help="The daily refresh sends floor-safe offers to watchers by itself (once a week per "
-                              "listing). Off: you press Send on List cards.")
+                         help="The daily refresh sends floor-safe offers to watchers by itself once a card has been "
+                              "listed a week without selling, then at most once a week. Off: you press Send on List cards.")
         if auto != bool(db.setting("watcher_offers_auto")):
             db.set_setting("watcher_offers_auto", auto)
         t1, t2 = st.columns(2)

@@ -359,7 +359,7 @@ def _safe(fn, *a):
 def offer_plan(eligible, rows, pct, today=None):
     """Pure. Watcher offers to send. eligible: listing ids eBay says have watchers to offer to; rows: [(draft id,
     listing id, draft dict)] of live listings. pct % off the listed price, never under the card's profit floor and
-    at most one offer per listing a week. Listings without a known floor (not listed by this app, no market)
+    at most one offer per listing a week, the first once it has been listed a week without selling. Listings without a known floor (not listed by this app, no market)
     are left out. Returns [{id, listing_id, title, price, offer, floor, send, why}]."""
     today = today or datetime.date.today()
     out = []
@@ -369,10 +369,12 @@ def offer_plan(eligible, rows, pct, today=None):
         price = float(d.get("price") or 0)
         floor = d.get("profit_floor") or profit_floor(d.get("market"), d.get("_cost"))
         offer = round(price * (1 - pct / 100), 2)
-        last = d.get("watcher_offer_at")
+        last, listed = d.get("watcher_offer_at"), (d.get("posted_at") or d.get("_created") or "")[:10]
+        age = lambda iso: (today - datetime.date.fromisoformat(iso)).days
         why = ("no market value, so no profit floor" if not floor
                else f"£{offer:.2f} would be under your floor £{floor:.2f}" if offer < floor
                else f"offered {last}, waiting a week" if last and (today - datetime.date.fromisoformat(last)).days < 7
+               else f"listed {listed}, offers once unsold for a week" if listed and age(listed) < 7
                else "")
         out.append({"id": did, "listing_id": str(lid), "title": d.get("title"), "price": price, "offer": offer,
                     "floor": floor, "send": not why, "why": why})
@@ -384,9 +386,9 @@ def watcher_offers(send=False, pct=None):
     Returns (plan, sent, errors)."""
     pct = float(db.setting("watcher_offer_pct") if pct is None else pct)
     rows = []
-    for r in db.q("SELECT id, listing_id, data_json FROM drafts WHERE status='posted' AND listing_id IS NOT NULL"):
+    for r in db.q("SELECT id, listing_id, data_json, created_at FROM drafts WHERE status='posted' AND listing_id IS NOT NULL"):
         d = json.loads(r["data_json"])
-        d["_cost"] = cost_of(d)
+        d["_cost"], d["_created"] = cost_of(d), r["created_at"]
         rows.append((r["id"], r["listing_id"], d))
     plan = offer_plan(ebay.watcher_eligible(), rows, pct)
     sent, errors = 0, []

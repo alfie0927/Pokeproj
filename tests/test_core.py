@@ -1060,6 +1060,11 @@ def test_profit_floor():
     assert not by[2]["send"] and "floor" in by[2]["why"]            # 86 - 5 % = 81.70 < 84
     assert not by[3]["send"] and "week" in by[3]["why"]
     assert not by[4]["send"] and "no market" in by[4]["why"]
+    young = {"price": 95, "profit_floor": 50, "posted_at": "2026-11-22"}            # listed 5 days ago
+    old = {"price": 95, "profit_floor": 50, "_created": "2026-11-20 09:00:00"}      # 7 days, no posted_at
+    p = {x["id"]: x for x in listing.offer_plan(["7", "8"], [(7, "7", young), (8, "8", old)], 5, today=date(2026, 11, 27))}
+    assert not p[7]["send"] and "unsold for a week" in p[7]["why"]
+    assert p[8]["send"] and p[8]["offer"] == 90.25
 
 
 def test_thank_plan():

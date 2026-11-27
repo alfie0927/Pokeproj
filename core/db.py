@@ -104,7 +104,7 @@ DEFAULTS = {
     "buy_pct": 80.0,               # you buy at this % of market (cost basis when Inventory has no cost)
     "min_profit_pct": 5.0,         # never price, mark down or accept an offer under cost + this %
     "watcher_offer_pct": 5.0,      # % off offered to watchers of a listing (never under the floor)
-    "watcher_offers_auto": False,  # send those offers automatically (daily job); off = you press the button
+    "watcher_offers_auto": True,   # daily job: offer watchers watcher_offer_pct off once a card is unsold for a week
     "best_offer": True,           # new listings accept offers; eBay answers them automatically (below)
     "bo_accept_pct": 92.0,         # ...accept offers at or above this % of your price
     "bo_decline_pct": 80.0,        # ...decline offers under this %; in between you decide in Seller Hub
