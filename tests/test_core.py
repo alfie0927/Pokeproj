@@ -1019,6 +1019,49 @@ def test_watch_no_duplicates():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def test_profit_floor():
+    from core import ebay
+    f = listing.profit_floor
+    assert f(100, buy_pct=80, min_profit_pct=5, fee_pct=0) == 84.0            # buy at 80 % + 5 % profit
+    assert f(100, cost=50, buy_pct=80, min_profit_pct=5, fee_pct=0) == 52.5   # real cost beats the rule
+    assert f(100, buy_pct=80, min_profit_pct=5, fee_pct=10) == 93.33          # selling fee covered
+    assert f(None, buy_pct=80, min_profit_pct=5, fee_pct=0) is None
+    assert f(1, buy_pct=80, min_profit_pct=5, fee_pct=0) == 0.99
+    # a cheaper listing never drags the price under the floor
+    price, _, warn = listing.target_price("lowest", 5, 100, 70, 2.9, floor=84)
+    assert price == 84 and "floor" in warn
+    assert listing.target_price("market", 5, 100, None, 2.9, floor=84)[0] == 95.0
+    # stale listings: suggestions stop at the floor; under the floor -> raise to it
+    assert listing.stale_check(95, 100, 20, 14, 5, floor=84) == ("unsold 20 d", 90.25)
+    assert listing.stale_check(86, 100, 20, 14, 5, floor=84) == ("unsold 20 d", 84)
+    assert listing.stale_check(84, 100, 20, 14, 5, floor=84) == ("unsold 20 d, at your profit floor", None)
+    assert listing.stale_check(75, 100, 2, 14, 5, floor=84) == ("below your profit floor", 84)
+    assert listing.stale_check(95, 100, 2, 14, 5, floor=84) == (None, None)
+    # Best Offer: eBay never auto-accepts, and always declines, under the floor
+    t = ebay.best_offer_terms(95, True, 92, 80, floor=84)
+    assert float(t["autoDeclinePrice"]["value"]) == 84.0 and float(t["autoAcceptPrice"]["value"]) == 87.4
+    t = ebay.best_offer_terms(86, True, 92, 80, floor=84)
+    assert float(t["autoAcceptPrice"]["value"]) == 84.0 and float(t["autoDeclinePrice"]["value"]) == 83.99
+    t = ebay.best_offer_terms(100, True, 92, 80, floor=95)   # floor above the accept %: decline under it
+    assert float(t["autoAcceptPrice"]["value"]) == 95.0 and float(t["autoDeclinePrice"]["value"]) == 94.99
+    assert float(ebay.best_offer_terms(100, True, 92, 80)["autoDeclinePrice"]["value"]) == 80.0   # no floor: as set
+    # watcher offers: only eligible listings, never under the floor, once a week
+    from datetime import date
+    rows = [(1, "111", {"title": "A", "price": 95, "market": 100}), (2, "222", {"title": "B", "price": 86, "market": 100}),
+            (3, "333", {"title": "C", "price": 95, "market": 100, "watcher_offer_at": "2026-11-25"}),
+            (4, "444", {"title": "D", "price": 40}), (5, "555", {"title": "E", "price": 95, "market": 100})]
+    import unittest.mock as um
+    with um.patch.object(listing.db, "setting", lambda k, d=None: {"buy_pct": 80, "min_profit_pct": 5,
+                                                                   "sell_fee_pct": 0}.get(k, d)):
+        plan = listing.offer_plan(["111", "222", "333", "444"], rows, 5, today=date(2026, 11, 27))
+    by = {p["id"]: p for p in plan}
+    assert set(by) == {1, 2, 3, 4}                                  # 5 has no watchers
+    assert by[1]["send"] and by[1]["offer"] == 90.25
+    assert not by[2]["send"] and "floor" in by[2]["why"]            # 86 - 5 % = 81.70 < 84
+    assert not by[3]["send"] and "week" in by[3]["why"]
+    assert not by[4]["send"] and "no market" in by[4]["why"]
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

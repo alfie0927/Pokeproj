@@ -431,25 +431,28 @@ def live_listings():
         sugg = listing.priced("market", pct, mkt, None)[0] if mkt else None
         listed = (d.get("posted_at") or p["created_at"] or "")[:10]
         days = (today - datetime.date.fromisoformat(listed)).days if listed else 0
-        need, new = listing.stale_check(price, mkt, days, stale_days, pct)
+        floor = d.get("profit_floor") or listing.profit_floor(d.get("market") or mkt, listing.cost_of(d))
+        need, new = listing.stale_check(price, mkt, days, stale_days, pct, floor)
         current[p["id"]] = price
         rows.append({"Photo": data_uri(photo(p["front_path"], 160)), "#": p["id"], "Title": d.get("title"),
                      "Price £": new if fill and new else price, "+ postage": postage, "Market now": mkt,
-                     "vs market": (price / mkt - 1) if mkt else None, "Suggested £": new or sugg,
+                     "vs market": (price / mkt - 1) if mkt else None, "Floor £": floor,
+                     "Suggested £": new or (max(sugg, floor or 0) if sugg else None),
                      "Needs": f"⚠ {need}" if need else "", "Added": listed, "Listing": ebay.listing_url(p["listing_id"])})
     df = pd.DataFrame(rows)
     flagged = sum(bool(r["Needs"]) for r in rows)
     st.caption(f"**Market now** = median eBay sold price without postage (as pokepulse shows it) for the card in its "
                f"condition · **Suggested** = {pct:g} % below market (your default); for a flagged listing (more than "
-               f"10 % above market, or unsold after {stale_days} days) it is also at least 5 % below today's price. "
-               "Edit **Price £** and press Push to change it on eBay.")
+               f"10 % above market, or unsold after {stale_days} days) it is also at least 5 % below today's price · "
+               "**Floor** = the lowest price that still makes your minimum profit: suggestions, Best Offer and watcher "
+               "offers never go under it. Edit **Price £** and press Push to change it on eBay.")
     if flagged and st.button(f"Fill in suggested prices for the {flagged} flagged listing(s)",
                              help="Only fills the table. Nothing changes on eBay until you press Push."):
         st.session_state.live_fill = True
         st.session_state.pop("live_editor", None)
         st.rerun()
     edited = st.data_editor(df, hide_index=True, key="live_editor", width="stretch", row_height=64,
-                            disabled=["Photo", "#", "Title", "+ postage", "Market now", "vs market", "Suggested £",
+                            disabled=["Photo", "#", "Title", "+ postage", "Market now", "vs market", "Floor £", "Suggested £",
                                       "Needs", "Added", "Listing"],
                             column_config={"Photo": st.column_config.ImageColumn(width="small"),
                                            "Listing": st.column_config.LinkColumn(display_text="Open ↗"),
@@ -457,10 +460,19 @@ def live_listings():
                                            "+ postage": st.column_config.NumberColumn(format="£%.2f"),
                                            "Market now": st.column_config.NumberColumn(format="£%.2f"),
                                            "Suggested £": st.column_config.NumberColumn(format="£%.2f"),
+                                           "Floor £": st.column_config.NumberColumn(
+                                               format="£%.2f", help="Lowest price that still makes your minimum "
+                                               "profit (Settings): cost, or your buy % of market, + min profit %"),
                                            "vs market": st.column_config.NumberColumn(format="percent",
                                                                                       help="Your total vs market; + = above")})
     changes = [(int(b["#"]), float(b["Price £"])) for _, b in edited.iterrows()
                if abs(current[int(b["#"])] - float(b["Price £"])) > 0.004]
+    floors = dict(zip(edited["#"].astype(int), edited["Floor £"]))
+    under = [(did, p, floors[did]) for did, p in changes if floors.get(did) == floors.get(did) and floors.get(did)
+             and p < floors[did] - 0.004]
+    if under:
+        st.warning("Under your profit floor, so these would sell below your minimum profit: "
+                   + ", ".join(f"#{did} £{p:.2f} (floor £{f:.2f})" for did, p, f in under))
     if st.button(f"Push {len(changes)} price change(s) to eBay", type="primary", disabled=not changes):
         for did, price in changes:
             try:
@@ -473,3 +485,39 @@ def live_listings():
         with st.spinner("Updating your spreadsheet…"):
             sheet.sync_quiet()
         st.rerun()
+    watcher_offer_box()
+
+
+def watcher_offer_box():
+    """Offers to people watching your listings: eBay's own way to sell faster, never under the floor."""
+    pct = float(db.setting("watcher_offer_pct"))
+    with st.container(border=True):
+        st.markdown("**Offers to watchers**")
+        try:
+            plan = _offer_plan()
+        except Exception as e:
+            st.caption(f"Couldn't ask eBay which listings have watchers: {e}")
+            return
+        go = [p for p in plan if p["send"]]
+        st.caption(f"{len(plan)} of your listings have watchers eBay lets you send an offer to. Each would get "
+                   f"{pct:g} % off for 2 days (Settings), only where that stays at or above your profit floor, and "
+                   "at most once a week per listing. Sales from watchers are usually the quickest.")
+        if plan:
+            st.dataframe(pd.DataFrame([{"#": p["id"], "Card": p["title"], "Price £": p["price"], "Offer £": p["offer"],
+                                        "Floor £": p["floor"], "Send": "yes" if p["send"] else p["why"]} for p in plan]),
+                         hide_index=True, width="stretch",
+                         column_config={k: st.column_config.NumberColumn(format="£%.2f")
+                                        for k in ("Price £", "Offer £", "Floor £")})
+        if st.button(f"Send {len(go)} offer(s) to watchers", disabled=not go, type="primary",
+                     help="Buyers watching these listings get a message with the offer price."):
+            _, sent, errors = listing.watcher_offers(send=True)
+            _offer_plan.clear()
+            if sent:
+                st.success(f"Sent {sent} offer(s)")
+            for e in errors:
+                st.error(e)
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _offer_plan():
+    return listing.watcher_offers(send=False)[0]

@@ -100,7 +100,11 @@ DEFAULTS = {
     "deal_auto": True,            # scan continuously in the background while the app runs
     "deal_ocr": True,             # OCR listing photos when the title has no card number
     "deal_min_market": 5.0,       # ...and only cards worth at least this much (skips £2 commons)
-    "best_offer": False,           # new listings accept offers; eBay answers them automatically (below)
+    "buy_pct": 80.0,               # you buy at this % of market (cost basis when Inventory has no cost)
+    "min_profit_pct": 5.0,         # never price, mark down or accept an offer under cost + this %
+    "watcher_offer_pct": 5.0,      # % off offered to watchers of a listing (never under the floor)
+    "watcher_offers_auto": False,  # send those offers automatically (daily job); off = you press the button
+    "best_offer": True,           # new listings accept offers; eBay answers them automatically (below)
     "bo_accept_pct": 92.0,         # ...accept offers at or above this % of your price
     "bo_decline_pct": 80.0,        # ...decline offers under this %; in between you decide in Seller Hub
     "stale_days": 14,              # Live on eBay: flag listings unsold after this many days

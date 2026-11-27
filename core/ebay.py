@@ -356,20 +356,26 @@ def condition_payload(d):
     return "USED_VERY_GOOD", [{"name": "40001", "values": [RAW_IDS[d["condition"] or "NM"]]}]
 
 
-def best_offer_terms(price, enabled=None, accept_pct=None, decline_pct=None):
+def best_offer_terms(price, enabled=None, accept_pct=None, decline_pct=None, floor=None):
     """Inventory API bestOfferTerms for a listing at `price` (Settings by default), or None when Best Offer is off.
-    eBay answers offers itself: >= accept_pct % of the price accepted, under decline_pct % declined."""
+    eBay answers offers itself: >= accept_pct % of the price accepted, under decline_pct % declined. With a profit
+    floor (listing.profit_floor), offers under it are always declined and never auto-accepted."""
     enabled = db.setting("best_offer") if enabled is None else enabled
     if not enabled:
         return None
     acc = float(db.setting("bo_accept_pct") if accept_pct is None else accept_pct)
     dec = float(db.setting("bo_decline_pct") if decline_pct is None else decline_pct)
+    if floor and price > 0:   # as % of this price, so the floor wins whichever is higher
+        dec = max(dec, floor / price * 100)
+        acc = max(acc, dec)
     gbp = lambda pct: {"value": f"{price * pct / 100:.2f}", "currency": "GBP"}
     terms = {"bestOfferEnabled": True}
     if 0 < acc < 100:   # eBay rejects an auto-accept price at or above the listing price
         terms["autoAcceptPrice"] = gbp(acc)
     if 0 < dec < min(acc, 100):
         terms["autoDeclinePrice"] = gbp(dec)
+    elif floor and 0 < dec < 100:   # floor at the accept level: decline everything under it
+        terms["autoDeclinePrice"] = gbp(dec - 0.01 / price * 100)
     return terms
 
 
@@ -389,7 +395,7 @@ def post_listing(sku, d, image_urls):
                                  "paymentPolicyId": db.setting("payment_policy"),
                                  "returnPolicyId": db.setting("return_policy")},
              "pricingSummary": {"price": {"value": f"{d['price']:.2f}", "currency": "GBP"}}}
-    if terms := best_offer_terms(d["price"]):
+    if terms := best_offer_terms(d["price"], floor=d.get("profit_floor")):
         offer["listingPolicies"]["bestOfferTerms"] = terms
     existing = []
     try:
@@ -454,7 +460,27 @@ def rescale_offer_terms(terms, old_price, new_price):
     return out
 
 
-def set_price(sku, price):
+def watcher_eligible():
+    """Listing ids whose watchers can be sent an offer right now (Sell Negotiation API, read-only)."""
+    out, offset = [], 0
+    while True:
+        j = call("GET", "/sell/negotiation/v1/find_eligible_items", params={"limit": 200, "offset": offset}).json()
+        out += [x["listingId"] for x in j.get("eligibleItems", [])]
+        offset += 200
+        if offset >= int(j.get("total") or 0):
+            return out
+
+
+def send_watcher_offer(listing_id, pct):
+    """Offer everyone watching a listing pct % off for 2 days (eBay's 'send offers to interested buyers').
+    Outward-facing: buyers get a message and can buy at that price."""
+    return call("POST", "/sell/negotiation/v1/send_offer_to_interested_buyers", json={
+        "allowCounterOffer": False, "offerDuration": {"unit": "DAY", "value": 2},
+        "message": "Thanks for watching - here's a little off if you'd like it.",
+        "offeredItems": [{"listingId": str(listing_id), "discountPercentage": f"{pct:g}", "quantity": 1}]}).json()
+
+
+def set_price(sku, price, floor=None):
     """Change a live listing's price. Updates the listing and the Inventory API offer together."""
     offers = call("GET", "/sell/inventory/v1/offer", params={"sku": sku, "marketplace_id": MARKET}).json().get("offers", [])
     if not offers:
@@ -463,7 +489,12 @@ def set_price(sku, price):
     bo = (o.get("listingPolicies") or {}).get("bestOfferTerms") or {}
     if bo.get("bestOfferEnabled"):
         # auto-accept/decline are £ figures: move them with the price (same % of it), in one offer update
-        o["listingPolicies"]["bestOfferTerms"] = rescale_offer_terms(bo, float(o["pricingSummary"]["price"]["value"]), price)
+        terms = rescale_offer_terms(bo, float(o["pricingSummary"]["price"]["value"]), price)
+        if floor:   # a lower price must not drag the auto-accept / auto-decline under the profit floor
+            for k in ("autoAcceptPrice", "autoDeclinePrice"):
+                if terms.get(k) and float(terms[k]["value"]) < floor:
+                    terms[k] = {"value": f"{min(floor, price - 0.01):.2f}", "currency": "GBP"}
+        o["listingPolicies"]["bestOfferTerms"] = terms
         o["pricingSummary"]["price"] = {"value": f"{price:.2f}", "currency": "GBP"}
         call("PUT", f"/sell/inventory/v1/offer/{o['offerId']}",
              json={k: v for k, v in o.items() if k not in ("offerId", "status", "listing", "statusReason")})

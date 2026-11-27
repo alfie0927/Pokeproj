@@ -49,7 +49,13 @@ def main():
             totals["own"] = prices.sync_own_sales()
         except ebay.EbayError as e:
             print(f"own orders: {e}", file=sys.stderr)
-    from core import labels, sheet
+    from core import labels, listing, sheet
+    if db.setting("watcher_offers_auto") and os.environ.get("EBAY_REFRESH_TOKEN"):
+        try:
+            _, sent, errs = listing.watcher_offers(send=True)
+            print(f"watcher offers sent: {sent}" + (f"; errors: {errs}" if errs else ""), file=sys.stderr)
+        except Exception as e:
+            print(f"watcher offers: {e}", file=sys.stderr)
     if db.setting("label_auto"):
         try:
             print(f"labels emailed: {labels.check()}", file=sys.stderr)

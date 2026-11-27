@@ -147,6 +147,26 @@ def page():
                 except Exception as e:
                     st.error(f"Couldn't update the spreadsheet: {e}")
     with st.container(border=True):
+        st.markdown("**Selling fast without losing money**")
+        st.caption("Your profit floor = what a card cost you (Inventory), or your buy % of market, plus your minimum "
+                   "profit. Prices, stale-listing suggestions, Best Offer auto-accept/decline and watcher offers "
+                   "never go under it.")
+        f1, f2, f3, f4 = st.columns(4)
+        for col, key, label, lo, hi in ((f1, "buy_pct", "You buy at % of market", 10.0, 100.0),
+                                        (f2, "min_profit_pct", "Minimum profit %", 0.0, 100.0),
+                                        (f3, "watcher_offer_pct", "Watcher offer % off", 5.0, 50.0)):
+            v = col.number_input(label, lo, hi, float(db.setting(key)), 1.0, key=f"set_{key}")
+            if v != float(db.setting(key)):
+                db.set_setting(key, v)
+        auto = f4.toggle("Send watcher offers daily", bool(db.setting("watcher_offers_auto")),
+                         help="The daily refresh sends floor-safe offers to watchers by itself (once a week per "
+                              "listing). Off: you press Send on List cards.")
+        if auto != bool(db.setting("watcher_offers_auto")):
+            db.set_setting("watcher_offers_auto", auto)
+        b, m = float(db.setting("buy_pct")), float(db.setting("min_profit_pct"))
+        st.caption(f"Floor now: **{b:g} % of market + {m:g} % = {b * (1 + m / 100):.0f} % of market** "
+                   "for cards without a recorded cost.")
+    with st.container(border=True):
         st.markdown("**Photo watcher (iCloud 'pokemon' folder)**")
         import watch_photos
         found = watch_photos.find_folder()
